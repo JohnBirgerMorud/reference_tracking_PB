@@ -7,9 +7,9 @@ def argument_parser():
 
     # experiment
     parser.add_argument('--random-seed', type=int, default=5, help='Random seed. Default is 5.')
-    parser.add_argument('--col-av', type=bool, default=True, help='Avoid collisions. Default is True.')
-    parser.add_argument('--obst-av', type=bool, default=True, help='Avoid obstacles. Default is True.')
-
+    parser.add_argument('--col-av', action=argparse.BooleanOptionalAction, default=True, help='Avoid collisions. Default is True.')
+    parser.add_argument('--obst-av', action=argparse.BooleanOptionalAction, default=True, help='Avoid obstacles. Default is True.')
+    parser.add_argument('--save-path', type=str, default=None, help='Optional output directory for saved results and checkpoints.')
     # dataset
     parser.add_argument('--horizon', type=int, default=100, help='Time horizon for the computation. Default is 100.')
     parser.add_argument('--n-agents', type=int, default=2, help='Number of agents. Default is 2.')
@@ -36,7 +36,8 @@ def argument_parser():
     parser.add_argument('--epochs', type=int, default=-1, help='Total number of epochs for training. Default is 5000 if collision avoidance, else 100.')
     parser.add_argument('--lr', type=float, default=-1, help='Learning rate. Default is 2e-3 if collision avoidance, else 5e-3.')
     parser.add_argument('--log-epoch', type=int, default=-1, help='Frequency of logging in epochs. Default is 0.1 * epochs.')
-    parser.add_argument('--return-best', type=bool, default=True, help='Return the best model on the validation data among all logged iterations. The train data can be used instead of validation data. The Default is True.')
+    parser.add_argument('--return-best', action=argparse.BooleanOptionalAction, default=True, help='Return the best model on the validation data among all logged iterations. The train data can be used instead of validation data. The Default is True.')
+    parser.add_argument('--load-controller', type=str, default=None, help='Optional path to a compatible trained controller checkpoint.')
 
     # TODO: add the following
     # parser.add_argument('--patience-epoch', type=int, default=None, help='Patience epochs for no progress. Default is None which sets it to 0.2 * total_epochs.')
@@ -54,15 +55,15 @@ def argument_parser():
         args.batch_size = args.num_rollouts  # use all train data
 
     if args.epochs == -1 or args.epochs is None:
-        args.epochs = 150 if args.col_av else 50
+        args.epochs = 200 if args.col_av else 50
 
     if args.lr == -1 or args.lr is None:
         # args.lr = 2e-3 if args.col_av else 5e-3
-        args.lr = 4e-4
+        args.lr = 8e-4
 
     if args.log_epoch == -1 or args.log_epoch is None:
         # args.log_epoch = math.ceil(float(args.epochs)/10)
-        args.log_epoch = 1
+        args.log_epoch = 20
 
     # assertions and warning
     if not args.col_av:
@@ -83,7 +84,7 @@ def argument_parser():
 def print_args(args):
     msg = '\n[INFO] Dataset: n_agents: %i' % args.n_agents + ' -- num_rollouts: %i' % args.num_rollouts
     msg += ' -- std_ini: %.2f' % args.std_init_plant + ' -- time horizon: %i' % args.horizon
-
+    
     msg += '\n[INFO] Plant: spring constant: %.2f' % args.spring_const + ' -- use linearized plant: ' + str(args.linearize_plant)
 
     msg += '\n[INFO] Controller: dimension of the internal state: %i' % args.dim_internal

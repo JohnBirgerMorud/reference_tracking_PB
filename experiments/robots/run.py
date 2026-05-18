@@ -27,13 +27,16 @@ def main():
     checkpoints) under `experiments/robots/saved_results/`.
     """
     # ----- SET UP LOGGER / OUTPUT FOLDERS -----
+    args = argument_parser()
     now = datetime.now().strftime("%m_%d_%H_%M_%S")
-    save_path = os.path.join(BASE_DIR, 'experiments', 'robots', 'saved_results')
+    save_path = args.save_path or os.path.join(BASE_DIR, 'experiments', 'robots', 'saved_results')
 
     save_folder = os.path.join(save_path, 'perf_boost_' + now)
     save_folder_gif = os.path.join(save_folder, 'gifs')
+    checkpoint_folder = os.path.join(save_folder, 'checkpoints')
     os.makedirs(save_folder, exist_ok=True)
     os.makedirs(save_folder_gif, exist_ok=True)
+    os.makedirs(checkpoint_folder, exist_ok=True)
 
     logging.basicConfig(
         filename=os.path.join(save_folder, 'log'),
@@ -45,7 +48,7 @@ def main():
     logger = WrapLogger(logger)
 
     # ----- parse and set experiment arguments -----
-    args = argument_parser()
+    
     msg = print_args(args)
     logger.info(msg)
     torch.manual_seed(args.random_seed)
@@ -161,18 +164,39 @@ def main():
     ren_internal_state_init=None,
 ).to(device)
 
-    ckpt = torch.load(
-        "experiments/robots/saved_results/perf_boost_05_14_23_18_10/trained_controller.pt",
-        map_location=device,
-    )
-
-    ren_state = {
-        k: v for k, v in ckpt.items()
-        if k in ctl.c_ren.state_dict()
-    }
-
-    ctl.c_ren.load_state_dict(ren_state, strict=False)
-    ctl.reset()
+    if args.load_controller is not None:
+        ckpt = torch.load(args.load_controller, map_location=device)
+        if "controller_state_dict" in ckpt:
+            current_state = ctl.state_dict()
+            controller_state = {
+                k: v for k, v in ckpt["controller_state_dict"].items()
+                if k in current_state and current_state[k].shape == v.shape
+            }
+            skipped = sorted(set(ckpt["controller_state_dict"].keys()) - set(controller_state.keys()))
+            ctl.load_state_dict(controller_state, strict=False)
+        elif "ren_state_dict" in ckpt:
+            current_state = ctl.c_ren.state_dict()
+            ren_state = {
+                k: v for k, v in ckpt["ren_state_dict"].items()
+                if k in current_state and current_state[k].shape == v.shape
+            }
+            skipped = sorted(set(ckpt["ren_state_dict"].keys()) - set(ren_state.keys()))
+            ctl.c_ren.load_state_dict(ren_state, strict=False)
+            if "mlp_state_dict" in ckpt:
+                ctl.MLP.load_state_dict(ckpt["mlp_state_dict"], strict=False)
+        else:
+            current_state = ctl.c_ren.state_dict()
+            ren_state = {
+                k: v for k, v in ckpt.items()
+                if k in current_state and current_state[k].shape == v.shape
+            }
+            skipped = sorted(set(ckpt.keys()) - set(ren_state.keys()))
+            ctl.c_ren.load_state_dict(ren_state, strict=False)
+        ctl.reset()
+        logger.info(
+            f"[INFO] loaded compatible controller tensors from {args.load_controller}; "
+            f"skipped {len(skipped)} incompatible/non-REN entries."
+        )
 
 
 
@@ -191,7 +215,7 @@ def main():
         obstacle_centers=obstacle_centers,
         obstacle_covs=obstacle_covs,
         min_dist=args.min_dist if args.col_av else None,
-        n_agents=sys.n_agents if args.col_av else None,
+        n_agents=sys.n_agents,
         position_deadzone=0.15,
         steady_state_velocity_radius=0.15,
     )
@@ -230,7 +254,7 @@ def main():
         x_verif[0, :, :],
         xbar=xbar_train,
         n_agents=sys.n_agents,
-        save_folder="experiments/robots/saved_results/BIRGER_TEST",
+        save_folder=save_folder,
         filename='Only PID.pdf',
         text="Not ONLY PID",
         T=t_ext,
@@ -244,7 +268,7 @@ def main():
     # with torch.no_grad():
     #     x_verif_pb, _, u_verif_pb = sys.rollout(ctl, data_verif)
 
-    # gif_root = "experiments/robots/saved_results/BIRGER_TEST"
+    # gif_root = save_folder
     # frame_folder = os.path.join(gif_root, "frames_perfboosting_train_ref")
     # gif_filename = os.path.join(gif_root, "Trained PerfBoosting.gif")
 
@@ -281,7 +305,8 @@ def main():
 
         # print info
         if epoch % args.log_epoch == 0:
-            msg = 'Epoch: %i --- train loss: %.2f' % (epoch, loss)
+            msg = 'Epoch: %i --- train loss: %.2f' % (epoch, loss.detach().item())
+            loss_valid_value = None
 
             if args.return_best:
                 # rollout the current controller on the valid data
@@ -291,15 +316,33 @@ def main():
                     )
                     # loss of the valid data
                     loss_valid = loss_fn.forward(x_log_valid, u_log_valid, e_log_valid)
-                msg += ' ---||--- validation loss: %.2f' % (loss_valid.item())
+                loss_valid_value = loss_valid.item()
+                msg += ' ---||--- validation loss: %.2f' % loss_valid_value
                 # compare with the best valid loss
-                if loss_valid.item() < best_valid_loss:
-                    best_valid_loss = loss_valid.item()
+                if loss_valid_value < best_valid_loss:
+                    best_valid_loss = loss_valid_value
                     best_params_ren = ctl.get_parameters_as_vector()  # record state dict if best on valid
                     best_params_mlp = ctl.get_mlp_parameters()
                     msg += ' (best so far)'
+            checkpoint = {
+                "epoch": epoch,
+                "controller_state_dict": ctl.state_dict(),
+                "ren_state_dict": ctl.c_ren.state_dict(),
+                "mlp_state_dict": ctl.MLP.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "Q": Q,
+                "args": vars(args),
+                "train_loss": loss.detach().item(),
+                "validation_loss": loss_valid_value,
+                "best_valid_loss": best_valid_loss if args.return_best else None,
+            }
+            checkpoint_epoch_file = os.path.join(checkpoint_folder, f"checkpoint_epoch_{epoch:05d}.pt")
+            checkpoint_latest_file = os.path.join(checkpoint_folder, "checkpoint_latest.pt")
+            torch.save(checkpoint, checkpoint_epoch_file)
+            torch.save(checkpoint, checkpoint_latest_file)
             duration = time.time() - t
             msg += ' ---||--- time: %.0f s' % (duration)
+            msg += f' ---||--- checkpoint: {checkpoint_epoch_file}'
             logger.info(msg)
             t = time.time()
 
@@ -326,7 +369,7 @@ def main():
         )   # use the entire train data, not a batch
         # evaluate losses
         loss = loss_fn.forward(x_log, u_log, e_log)
-        msg = 'Loss: %.4f' % (loss)
+        msg = 'Loss: %.4f' % (loss.item())
 # count collisions
     if args.col_av:
         num_col = loss_fn.count_collisions(x_log)
@@ -355,9 +398,9 @@ def main():
     x_log, _, u_log = sys.rollout(ctl, plot_data)
     plot_trajectories(
         x_log[0, :, :],  # remove extra dim due to batching
-        xbar=plot_data[0, 5, 8:],
+        xbar=plot_data[0, min(5, plot_data.shape[1] - 1), nx:],
         n_agents=sys.n_agents,
-        save_folder="experiments/robots/saved_results/BIRGER_TEST",
+        save_folder=save_folder,
         filename='CL_trained.pdf',
         text="CL - trained controller",
         T=t_ext,
@@ -371,7 +414,7 @@ def main():
         x_verif[0, :, :],  # remove extra dim due to batching
         xbar=xbar_train,
         n_agents=sys.n_agents,
-        save_folder="experiments/robots/saved_results/BIRGER_TEST",
+        save_folder=save_folder,
         filename='CL_diag_trained.pdf',
         text="rPB - trained controller",
         T=t_ext,
@@ -383,7 +426,7 @@ def main():
         x_verif[1, :, :],  # remove extra dim due to batching
         xbar=xbar_verif2,
         n_agents=sys.n_agents,
-        save_folder="experiments/robots/saved_results/BIRGER_TEST",
+        save_folder=save_folder,
         filename='CL_direct_trained.pdf',
         text="rPB - trained controller",
         T=t_ext,
@@ -395,7 +438,7 @@ def main():
         x_verif[2, :, :],  # remove extra dim due to batching
         xbar=xbar_verif3,
         n_agents=sys.n_agents,
-        save_folder="experiments/robots/saved_results/BIRGER_TEST",
+        save_folder=save_folder,
         filename='CL_center_trained.pdf',
         text="CL - trained controller",
         T=t_ext,
@@ -406,7 +449,7 @@ def main():
 
 
 #### Plot the evolution of the reference over time for the diagonal scenario ####
-    x_ref_evol = torch.zeros(1, args.horizon + 200, 8)
+    x_ref_evol = torch.zeros(1, args.horizon + 200, 14)
     x_ref_evol[:, :, 0:2] = u_verif[0:1, :, 0:2]
     x_ref_evol[:, :, 4:6] = u_verif[0:1, :, 2:4]
     x_ref_evol = x_ref_evol + xbar_train
@@ -417,7 +460,7 @@ def main():
         x_ref_evol[0, :, :],  # remove extra dim due to batching
         xbar=xbar_train,
         n_agents=sys.n_agents,
-        save_folder="experiments/robots/saved_results/BIRGER_TEST",
+        save_folder=save_folder,
         filename='CL_xbar_evolution.pdf',
         text="CL - evolution of the reference",
         T=t_ext,

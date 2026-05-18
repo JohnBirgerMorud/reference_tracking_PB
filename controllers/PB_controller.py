@@ -50,11 +50,15 @@ class PerfBoostController(nn.Module):
         self.output_amplification = output_amplification
 
         # set initial conditions
-        self.input_init = input_init.reshape(1, -1)
-        self.output_init = output_init.reshape(1, -1)
-        self.vg_init = torch.zeros(1,4).reshape(1,-1)
-        self.xbar_init = torch.zeros(1,4).reshape(1,-1)
+        # self.input_init = input_init.reshape(1, -1)
+        # self.output_init = output_init.reshape(1, -1)
+        # self.vg_init = torch.zeros(1,4).reshape(1,-1)
+        # self.xbar_init = torch.zeros(1,4).reshape(1,-1)
 
+        self.register_buffer("input_init", input_init.reshape(1, -1))
+        self.register_buffer("output_init", output_init.reshape(1, -1))
+        self.register_buffer("vg_init", torch.zeros(1, output_init.shape[-1]))
+        self.register_buffer("xbar_init", torch.zeros(1, output_init.shape[-1]))
 
         # set dimensions
         self.dim_in = self.input_init.shape[-1]

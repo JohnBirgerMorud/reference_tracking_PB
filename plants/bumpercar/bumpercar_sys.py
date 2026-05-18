@@ -167,9 +167,9 @@ class BumpercarSystem(nn.Module):
         super().__init__()
 
         self.positionPID = PositionPidController(
-            kp_p=0.5,     kd_p=0.2,     ki_p=0,  # P,I,D, distance
-            kp_theta=1, kd_theta=0.3, ki_theta=0.0,
-            params=params, n_agents=2, dt=0.1)
+            kp_p=0.5, kd_p=0.0, ki_p=0.0,
+            kp_theta=1.0, kd_theta=0.0, ki_theta=0.0,
+            params=params, n_agents=n_agents, dt=dt)
         
         self.par = params
         self.n_agents = n_agents
@@ -336,7 +336,7 @@ class BumpercarSystem(nn.Module):
 
 
 
-class MLPDynamicsModel:
+class MLPDynamicsModel(nn.Module):
     def __init__(self,
                  initial_state,
                  params,
@@ -347,26 +347,22 @@ class MLPDynamicsModel:
                  hidden_sizes = [256, 128],
                  x_scaling = [1.9, 0.6, 0.1, 2.012]):
         
+        super().__init__()
+
         # Internal variables
         # self.prev_car_state = torch.tensor(initial_state, dtype=torch.float32)
         # car_state = torch.tensor(initial_state, dtype=torch.float32)
         self.par = params
         
         # Scaling
-        self.x_scaling = torch.tensor(x_scaling, dtype=torch.float32)
+        self.register_buffer("x_scaling", torch.tensor(x_scaling, dtype=torch.float32))
 
         # Load weights
         self.model = MLP(input_dim + state_dim, output_dim, hidden_sizes)
         self.model.load_state_dict(torch.load(model_path, map_location="cpu"))
         self.model.eval()
-
-        # Save weights
-        self.weights = []
-        self.biases = []
-        for layer in self.model.model:
-            if isinstance(layer, nn.Linear):
-                self.weights.append(layer.weight.detach())
-                self.biases.append(layer.bias.detach())
+        for parameter in self.model.parameters():
+            parameter.requires_grad_(False)
 
     def pose_dynamics(self, car_state):
         # Unpack state
@@ -422,9 +418,7 @@ class MLPDynamicsModel:
 
         # Predict [vf, alpha_f, alpha_r]_k+1
         h0 = torch.cat([kinematic_state / self.x_scaling, kinematic_input], dim=-1)  # [B, 6]
-        h1 = torch.relu(h0 @ self.weights[0].T + self.biases[0])
-        h2 = torch.relu(h1 @ self.weights[1].T + self.biases[1])
-        next_kinematic_state = h2 @ self.weights[2].T + self.biases[2]  # [B, 3]
+        next_kinematic_state = self.model(h0)  # [B, 3]
 
         vf_plus     = torch.where(next_kinematic_state[:, 0] >= 0.03,
                                 torch.clamp(next_kinematic_state[:, 0], min=0.0),

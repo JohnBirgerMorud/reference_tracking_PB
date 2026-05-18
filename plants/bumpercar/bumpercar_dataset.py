@@ -69,10 +69,10 @@ class BumpercarDataset(CostumDataset):
             ref_start = state_dim_x0
 
             # Agent 1 reference x, y
-            data[rollout_num, 1:, ref_start + 0:ref_start + 2] = vecs[0:2]
+            data[rollout_num, :, ref_start + 0:ref_start + 2] = vecs[0:2]
 
             # Agent 2 reference x, y
-            data[rollout_num, 1:, ref_start + 7:ref_start + 9] = vecs[2:4]
+            data[rollout_num, :, ref_start + 7:ref_start + 9] = vecs[2:4]
 
         assert data.shape[0] == num_samples
         return data

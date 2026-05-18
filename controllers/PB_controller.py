@@ -7,7 +7,7 @@ import time
 from argparse import Namespace
 from config import device
 from .contractive_ren import ContractiveREN
-from .MLP import MLP
+from .MLP import MLP, ZeroController
 from utils.assistive_functions import to_tensor
 
 

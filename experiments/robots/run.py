@@ -2,15 +2,19 @@ import sys, os, logging, torch, time
 from datetime import datetime
 from torch.utils.data import DataLoader
 
+
+
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(1, BASE_DIR)
 
+from controllers.MLP import ZeroController
 from config import device
 from arg_parser import argument_parser, print_args
-from plants import RobotsSystem, RobotsDataset
+from plants import RobotsSystem, RobotsDataset, BumpercarDataset, BumpercarSystem, car_params
 from utils.plot_functions import *
 from controllers import PerfBoostController
-from loss_functions import RobotsLoss
+from loss_functions import RobotsLoss, BumpercarLoss
 from utils.assistive_functions import WrapLogger
 
 
@@ -49,9 +53,22 @@ def main():
 
 
     # ------------ 1. Dataset ------------
-    xbar_train = torch.tensor([0, 4, 0, 0, 4, 4, 0, 0])
-    xbar_verif2 = torch.tensor([5, 4, 0, 0, -1, 4, 0, 0])
-    xbar_verif3 = torch.tensor([0.5, 4, 0, 0, 1.5, 4, 0, 0])
+    # [x, y, theta, vf, beta_f, beta_r, delta] for each car
+    xbar_train = torch.tensor([
+        4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ])
+
+    xbar_verif2 = torch.tensor([
+        5.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        -1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ])
+
+    xbar_verif3 = torch.tensor([
+        0.5, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        1.5, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ])
+
 
     # Obstacle scenarios used in experiments. `RobotsLoss` expects lists of tensors.
     # The final assignment below is the one used (the intermediate ones are kept as quick presets).
@@ -78,13 +95,25 @@ def main():
 
     # To disable obstacle loss entirely, pass `--no-obst-av` (recommended) rather than overriding here.
 
-    dataset = RobotsDataset(
+    x0_bumpercar = torch.tensor([
+            0.0, 0.0, torch.pi/2, 0.0, 0.1, 0.3, 0.5,   # car 1
+            4.0, 0.0, torch.pi/2, 0.0, 0.1, 0.3, 0.5,   # car 2
+        ])
+    dataset = BumpercarDataset(
         random_seed=args.random_seed,
         horizon=args.horizon,
         x_bar=xbar_verif2,
+        x0=x0_bumpercar,
         std_ini=args.std_init_plant,
         n_agents=2,
     )
+    # dataset = RobotsDataset(
+    #     random_seed=args.random_seed,
+    #     horizon=args.horizon,
+    #     x_bar=xbar_verif2,
+    #     std_ini=args.std_init_plant,
+    #     n_agents=2,
+    # )
 
 # divide to train and test
     train_data, test_data = dataset.get_data(num_train_samples=args.num_rollouts, num_test_samples=500)
@@ -94,9 +123,10 @@ def main():
 # data for plots
     t_ext = args.horizon * 4
     n_agents = 2
+    nx = 7 * n_agents
 
     plot_data = test_data[250:350, :, :]
-    plot_data[:, 0, :8] = dataset.x0.detach()
+    plot_data[:, 0, :nx] = dataset.x0.detach()
     plot_data = plot_data.to(device)
 
 # batch the data
@@ -105,35 +135,55 @@ def main():
 # ------------ 2. Plant ------------
     plant_input_init = None     # all zero
     plant_state_init = None    # same as xbar
-    sys = RobotsSystem(
+    # sys = RobotsSystem(
+    #     x_init=plant_state_init,
+    #     u_init=plant_input_init,
+    #     linear_plant=args.linearize_plant,
+    #     k=args.spring_const,
+    #     n_agents=n_agents,
+    # ).to(device)
+    
+    sys = BumpercarSystem(
+        params=car_params,
         x_init=plant_state_init,
         u_init=plant_input_init,
-        linear_plant=args.linearize_plant,
-        k=args.spring_const,
-        n_agents=n_agents,
     ).to(device)
-
 
 # ------------ 3. Controller ------------
     ctl = PerfBoostController(
-        noiseless_forward=sys.noiseless_forward,
-        input_init=sys.x_init,
-        output_init=sys.u_init,
-        dim_internal=args.dim_internal,
-        dim_nl=args.dim_nl,
-        initialization_std=args.cont_init_std,
-        output_amplification=20,
-    ).to(device)
+    noiseless_forward=sys.noiseless_forward,
+    input_init=sys.x_init,
+    output_init=sys.u_init,
+    dim_internal=args.dim_internal,
+    dim_nl=args.dim_nl,
+    initialization_std=args.cont_init_std,
+    output_amplification=1,
+    ren_internal_state_init=None,
+).to(device)
+
+    ckpt = torch.load(
+        "experiments/robots/saved_results/perf_boost_05_14_23_18_10/trained_controller.pt",
+        map_location=device,
+    )
+
+    ren_state = {
+        k: v for k, v in ckpt.items()
+        if k in ctl.c_ren.state_dict()
+    }
+
+    ctl.c_ren.load_state_dict(ren_state, strict=False)
+    ctl.reset()
+
 
 
 # ------------ 4. Loss ------------
-    Q = 100 * torch.kron(torch.eye(args.n_agents), torch.eye(2)).to(device)
-    Qs = 1 * torch.kron(torch.eye(args.n_agents), torch.eye(2)).to(device)
-    loss_fn = RobotsLoss(
+    Q = 10 * torch.kron(torch.eye(args.n_agents), torch.eye(2)).to(device)
+    Qs = 1 * torch.kron(torch.eye(args.n_agents), torch.eye(1)).to(device)
+    loss_fn = BumpercarLoss(
         Q=Q,
         Qs=Qs,
         alpha_u=args.alpha_u,
-        xbar=train_data[0, :, 8:],
+        xbar=train_data[0, :, 14:],
         loss_bound=None,
         sat_bound=None,
         alpha_col=args.alpha_col,
@@ -142,6 +192,8 @@ def main():
         obstacle_covs=obstacle_covs,
         min_dist=args.min_dist if args.col_av else None,
         n_agents=sys.n_agents if args.col_av else None,
+        position_deadzone=0.15,
+        steady_state_velocity_radius=0.15,
     )
  
 # ------------ 5. Optimizer ------------
@@ -150,58 +202,64 @@ def main():
     optimizer = torch.optim.Adam(ctl.parameters(), lr=args.lr)
  
 # ------------ 6. Training ------------
+# plot PID without untrained rPB
+# ------------ PID-only verification ------------
+    logger.info("Plotting closed-loop trajectories with PID only...")
+
 # plot closed-loop trajectories before training the controller
     logger.info('Plotting closed-loop trajectories before training the controller...')
     x_log, _, u_log = sys.rollout(ctl, plot_data)
 
 
-    data_verif = torch.zeros(3, args.horizon + 200, 16)
+    nx = 7 * n_agents
+    data_verif = torch.zeros(3, args.horizon + 200, 2 * nx)
 
-    data_verif[:, 0:1, :8] = dataset.x0
-    data_verif[0:1, 1:, 8:] = xbar_train
-    data_verif[1:2, 1:, 8:] = xbar_verif2
-    data_verif[2:3, 1:, 8:] = xbar_verif3
+    data_verif[:, 0:1, :nx] = dataset.x0.view(1, 1, -1)
 
-    x_verif, _, u_verif = sys.rollout(ctl, data_verif)
+    data_verif[0:1, :, nx:] = xbar_train.view(1, 1, -1)
+    data_verif[1:2, :, nx:] = xbar_verif2.view(1, 1, -1)
+    data_verif[2:3, :, nx:] = xbar_verif3.view(1, 1, -1)
 
-    total_params = sum(p.numel() for p in ctl.parameters())
-    logger.info(f"Number of parameters: {total_params}")
+    data_verif = data_verif.to(device)
 
+    pid_only_ctl = ZeroController(ref_dim=2 * n_agents).to(device)
+
+    x_verif, _, u_verif = sys.rollout(pid_only_ctl, data_verif)
+    
     plot_trajectories(
-        x_verif[0, :, :],  # remove extra dim due to batching
+        x_verif[0, :, :],
         xbar=xbar_train,
         n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_diag_ref.pdf',
-        text="CL - before training",
+        save_folder="experiments/robots/saved_results/BIRGER_TEST",
+        filename='Only PID.pdf',
+        text="Not ONLY PID",
         T=t_ext,
         obstacle_centers=loss_fn.obstacle_centers,
         obstacle_covs=loss_fn.obstacle_covs,
     )
+    
+    # Trained Performance Boosting controller
+    # ctl.eval()
 
-    plot_trajectories(
-        x_verif[1, :, :],  # remove extra dim due to batching
-        xbar=xbar_verif2,
-        n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_direct_ref.pdf',
-        text="CL - before training",
-        T=t_ext,
-        obstacle_centers=loss_fn.obstacle_centers,
-        obstacle_covs=loss_fn.obstacle_covs,
-    )
+    # with torch.no_grad():
+    #     x_verif_pb, _, u_verif_pb = sys.rollout(ctl, data_verif)
 
-    plot_trajectories(
-        x_verif[2, :, :],  # remove extra dim due to batching
-        xbar=xbar_verif3,
-        n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_center_ref.pdf',
-        text="CL - before training",
-        T=t_ext,
-        obstacle_centers=loss_fn.obstacle_centers,
-        obstacle_covs=loss_fn.obstacle_covs,
-    )
+    # gif_root = "experiments/robots/saved_results/BIRGER_TEST"
+    # frame_folder = os.path.join(gif_root, "frames_perfboosting_train_ref")
+    # gif_filename = os.path.join(gif_root, "Trained PerfBoosting.gif")
+
+    # T = x_verif_pb.shape[1]
+    # save_trajectory_frames(
+    #     x=x_verif_pb[0, :, :],
+    #     xbar=xbar_train,
+    #     n_agents=sys.n_agents,
+    #     save_folder=frame_folder,
+    #     T=T,
+    #     interval=5,          # increase to 2, 5, etc. if it is too slow
+    #     obstacle_centers=loss_fn.obstacle_centers,
+    #     obstacle_covs=loss_fn.obstacle_covs,
+    # )
+
 
 
     logger.info('\n------------ Begin training ------------')
@@ -299,7 +357,7 @@ def main():
         x_log[0, :, :],  # remove extra dim due to batching
         xbar=plot_data[0, 5, 8:],
         n_agents=sys.n_agents,
-        save_folder=save_folder,
+        save_folder="experiments/robots/saved_results/BIRGER_TEST",
         filename='CL_trained.pdf',
         text="CL - trained controller",
         T=t_ext,
@@ -313,7 +371,7 @@ def main():
         x_verif[0, :, :],  # remove extra dim due to batching
         xbar=xbar_train,
         n_agents=sys.n_agents,
-        save_folder=save_folder,
+        save_folder="experiments/robots/saved_results/BIRGER_TEST",
         filename='CL_diag_trained.pdf',
         text="rPB - trained controller",
         T=t_ext,
@@ -325,7 +383,7 @@ def main():
         x_verif[1, :, :],  # remove extra dim due to batching
         xbar=xbar_verif2,
         n_agents=sys.n_agents,
-        save_folder=save_folder,
+        save_folder="experiments/robots/saved_results/BIRGER_TEST",
         filename='CL_direct_trained.pdf',
         text="rPB - trained controller",
         T=t_ext,
@@ -337,7 +395,7 @@ def main():
         x_verif[2, :, :],  # remove extra dim due to batching
         xbar=xbar_verif3,
         n_agents=sys.n_agents,
-        save_folder=save_folder,
+        save_folder="experiments/robots/saved_results/BIRGER_TEST",
         filename='CL_center_trained.pdf',
         text="CL - trained controller",
         T=t_ext,
@@ -359,7 +417,7 @@ def main():
         x_ref_evol[0, :, :],  # remove extra dim due to batching
         xbar=xbar_train,
         n_agents=sys.n_agents,
-        save_folder=save_folder,
+        save_folder="experiments/robots/saved_results/BIRGER_TEST",
         filename='CL_xbar_evolution.pdf',
         text="CL - evolution of the reference",
         T=t_ext,

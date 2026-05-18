@@ -35,27 +35,27 @@ def plot_trajectories(
     colors = ['tab:blue', 'tab:orange']
     for i in range(n_agents):
         ax.plot(
-            x[:T+1,4*i].detach().cpu(), x[:T+1,4*i+1].detach().cpu(),
+            x[:T+1,7*i].detach().cpu(), x[:T+1,7*i+1].detach().cpu(),
             color=colors[i%2], linewidth=1
         )
         ax.plot(
-            x[T:,4*i].detach().cpu(), x[T:,4*i+1].detach().cpu(),
+            x[T:,7*i].detach().cpu(), x[T:,7*i+1].detach().cpu(),
             color='k', linewidth=0.1, linestyle='dotted', dashes=(3, 15)
         )
     for i in range(n_agents):
         ax.plot(
-            x[0,4*i].detach().cpu(), x[0,4*i+1].detach().cpu(),
+            x[0,7*i].detach().cpu(), x[0,7*i+1].detach().cpu(),
             color=colors[i%2], marker='8'
         )
         ax.plot(
-            xbar[4*i].detach().cpu(), xbar[4*i+1].detach().cpu(),
+            xbar[7*i].detach().cpu(), xbar[7*i+1].detach().cpu(),
             color=colors[i%2], marker='*', markersize=10
         )
 
     if dots:
         for i in range(n_agents):
             ax.plot(  
-                x[:T+1,4*i].detach().cpu(), x[:T+1,4*i+1].detach().cpu(),
+                x[:T+1,7*i].detach().cpu(), x[:T+1,7*i+1].detach().cpu(),
                 color=colors[i%2], linewidth=1, marker = "x"
             )
 
@@ -63,7 +63,7 @@ def plot_trajectories(
         for i in range(n_agents):
             r = min_dist/2
             circle = ax.Circle(
-                (x[T, 4*i].detach().cpu(), x[T, 4*i+1].detach().cpu()),
+                (x[T, 7*i].detach().cpu(), x[T, 7*i+1].detach().cpu()),
                 r, color=colors[i%2], alpha=0.5, zorder=10
             )
             ax.add_patch(circle)
@@ -91,14 +91,14 @@ def plot_traj_vs_time(t_end, n_agents, save_folder, x, u=None, text="", save=Tru
     plt.figure(figsize=(4*p, 4))
     plt.subplot(1, p, 1)
     for i in range(n_agents):
-        plt.plot(t, x[:,4*i].detach().cpu())
-        plt.plot(t, x[:,4*i+1].detach().cpu())
+        plt.plot(t, x[:,7*i].detach().cpu())
+        plt.plot(t, x[:,7*i+1].detach().cpu())
     plt.xlabel(r'$t$')
     plt.title(r'$x(t)$')
     plt.subplot(1, p, 2)
     for i in range(n_agents):
-        plt.plot(t, x[:,4*i+2].detach().cpu())
-        plt.plot(t, x[:,4*i+3].detach().cpu())
+        plt.plot(t, x[:,7*i+2].detach().cpu())
+        plt.plot(t, x[:,7*i+3].detach().cpu())
     plt.xlabel(r'$t$')
     plt.title(r'$v(t)$')
     plt.suptitle(text)
@@ -168,29 +168,29 @@ def save_trajectory_frames(x, xbar, n_agents, save_folder, T=100, interval=1,f=5
             ax.pcolormesh(xx, yy, zz, cmap='Greys', vmin=z_min, vmax=z_max, shading='gouraud')
         for i in range(n_agents):
             ax.plot(
-                x[:t+1, 4*i].detach().cpu(), x[:t+1, 4*i+1].detach().cpu(),
+                x[:t+1, 7*i].detach().cpu(), x[:t+1, 7*i+1].detach().cpu(),
                 color=colors[i%2], linewidth=1
             )
             ax.plot(
-                x[t, 4*i].detach().cpu(), x[t, 4*i+1].detach().cpu(),
+                x[t, 7*i].detach().cpu(), x[t, 7*i+1].detach().cpu(),
                 color=colors[i%2], marker='o'
             )
             ax.plot(
-                x[0, 4*i].detach().cpu(), x[0, 4*i+1].detach().cpu(),
+                x[0, 7*i].detach().cpu(), x[0, 7*i+1].detach().cpu(),
                 color=colors[i%2], marker='o', markerfacecolor='none'
             )
             r = 0.5
             circle = plt.Circle(
-                (x[t, 4*i].detach().cpu(), x[t, 4*i+1].detach().cpu()),
+                (x[t, 7*i].detach().cpu(), x[t, 7*i+1].detach().cpu()),
                 r, color=colors[i%2], alpha=0.5, zorder=10
             )
             ax.add_patch(circle)
             ax.plot(
-                xbar[4*i].detach().cpu(), xbar[4*i+1].detach().cpu(),
+                xbar[7*i].detach().cpu(), xbar[7*i+1].detach().cpu(),
                 color=colors[i%2], marker='*', markersize=10
             )
             
-        dist = torch.sqrt((x[t, 4*0] - x[t, 4*1])**2 + (x[t, 4*0+1] - x[t, 4*1+1])**2)
+        dist = torch.sqrt((x[t, 7*0] - x[t, 7*1])**2 + (x[t, 7*0+1] - x[t, 7*1+1])**2)
         if dist < 1:
             ax.set_title('Collision', color='red')
              

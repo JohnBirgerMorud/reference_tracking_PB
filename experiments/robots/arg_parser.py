@@ -27,8 +27,8 @@ def argument_parser():
 
     # loss
     parser.add_argument('--alpha-u', type=float, default=0.1/400, help='Weight of the loss due to control input "u". Default is 0.1/400.')  #TODO: 400 is output_amplification^2
-    parser.add_argument('--alpha-col', type=float, default=100, help='Weight of the collision avoidance loss. Default is 100 if "col-av" is True, else None.')
-    parser.add_argument('--alpha-obst', type=float, default=5e3, help='Weight of the obstacle avoidance loss. Default is 5e3 if "obst-av" is True, else None.')
+    parser.add_argument('--alpha-col', type=float, default=500, help='Weight of the collision avoidance loss. Default is 100 if "col-av" is True, else None.')
+    parser.add_argument('--alpha-obst', type=float, default=10e3, help='Weight of the obstacle avoidance loss. Default is 5e3 if "obst-av" is True, else None.')
     parser.add_argument('--min-dist', type=float, default=1.0, help='TODO. Default is 1.0 if "col-av" is True, else None.')  #TODO: add help
 
     # optimizer
@@ -54,13 +54,15 @@ def argument_parser():
         args.batch_size = args.num_rollouts  # use all train data
 
     if args.epochs == -1 or args.epochs is None:
-        args.epochs = 1000 if args.col_av else 50
+        args.epochs = 150 if args.col_av else 50
 
     if args.lr == -1 or args.lr is None:
-        args.lr = 2e-3 if args.col_av else 5e-3
+        # args.lr = 2e-3 if args.col_av else 5e-3
+        args.lr = 4e-4
 
     if args.log_epoch == -1 or args.log_epoch is None:
-        args.log_epoch = math.ceil(float(args.epochs)/10)
+        # args.log_epoch = math.ceil(float(args.epochs)/10)
+        args.log_epoch = 1
 
     # assertions and warning
     if not args.col_av:

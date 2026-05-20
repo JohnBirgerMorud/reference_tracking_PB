@@ -201,7 +201,7 @@ def main():
 
 
 # ------------ 4. Loss ------------
-    Q = 10 * torch.kron(torch.eye(args.n_agents), torch.eye(2)).to(device)
+    Q = 20 * torch.kron(torch.eye(args.n_agents), torch.eye(2)).to(device)
     Qs = 1 * torch.kron(torch.eye(args.n_agents), torch.eye(1)).to(device)
     loss_fn = BumpercarLoss(
         Q=Q,
@@ -216,7 +216,7 @@ def main():
         obstacle_covs=obstacle_covs,
         min_dist=args.min_dist if args.col_av else None,
         n_agents=sys.n_agents,
-        position_deadzone=0.15,
+        position_deadzone=0.01,
         steady_state_velocity_radius=0.15,
     )
  

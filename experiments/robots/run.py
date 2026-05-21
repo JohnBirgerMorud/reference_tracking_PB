@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(1, BASE_DIR)
 
+from experiment_params import getCarFinalParams, getCarInitParams, getLossParams
 from controllers.MLP import ZeroController
 from config import device
 from arg_parser import argument_parser, print_args
@@ -56,68 +57,22 @@ def main():
 
 
     # ------------ 1. Dataset ------------
-    # [x, y, theta, vf, beta_f, beta_r, delta] for each car
-    xbar_train = torch.tensor([
-        4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    ])
-
-    xbar_verif2 = torch.tensor([
-        5.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        -1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    ])
-
-    xbar_verif3 = torch.tensor([
-        0.5, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        1.5, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    ])
-
-
-    # Obstacle scenarios used in experiments. `RobotsLoss` expects lists of tensors.
-    # The final assignment below is the one used (the intermediate ones are kept as quick presets).
-    obstacle_centers = [
-        torch.tensor([[-0.5, 0]], device=device),
-        torch.tensor([[0.5, 0.0]], device=device),
-    ]
-    obstacle_centers = [
-        torch.tensor([[0.5, 2]], device=device),
-        torch.tensor([[1, 2.0]], device=device),
-        torch.tensor([[3, 2]], device=device),
-        torch.tensor([[3.5, 2.0]], device=device),
-    ]
-    obstacle_centers = [
-        torch.tensor([[-1, 2]], device=device),
-        torch.tensor([[1, 2.0]], device=device),
-        torch.tensor([[3, 2]], device=device),
-        torch.tensor([[5, 2.0]], device=device),
-        torch.tensor([[7, 2.0]], device=device),
-        torch.tensor([[-3, 2.0]], device=device),
-    ]
-
-    obstacle_covs = [torch.tensor([[0.05, 0.05]], device=device)] * len(obstacle_centers)
-
-    # To disable obstacle loss entirely, pass `--no-obst-av` (recommended) rather than overriding here.
-
-    x0_bumpercar = torch.tensor([
-            0.0, 0.0, torch.pi/2, 0.0, 0.1, 0.3, 0.5,   # car 1
-            4.0, 0.0, torch.pi/2, 0.0, 0.1, 0.3, 0.5,   # car 2
-        ])
+    # [x, y, theta, vf, beta_f, beta_r, delta] for each car    
+    x0_bumpercar, _, obstacle_centers, obstacle_covs, car_init_radius, std_init_theta = getCarInitParams(device)
+    x_final_limit, y_final_limit, final_car_min_dist = getCarFinalParams()
+    
     dataset = BumpercarDataset(
         random_seed=args.random_seed,
         horizon=args.horizon,
-        x_bar=xbar_verif2,
         x0=x0_bumpercar,
-        std_ini=args.std_init_plant,
+        car_init_radius=car_init_radius,
+        x_final_limit=x_final_limit,
+        y_final_limit=y_final_limit,
+        final_car_min_dist=final_car_min_dist,
+        std_init_theta = std_init_theta,
         n_agents=2,
     )
-    # dataset = RobotsDataset(
-    #     random_seed=args.random_seed,
-    #     horizon=args.horizon,
-    #     x_bar=xbar_verif2,
-    #     std_ini=args.std_init_plant,
-    #     n_agents=2,
-    # )
-
+    
 # divide to train and test
     train_data, test_data = dataset.get_data(num_train_samples=args.num_rollouts, num_test_samples=500)
     train_data, test_data = train_data.to(device), test_data.to(device)
@@ -138,13 +93,6 @@ def main():
 # ------------ 2. Plant ------------
     plant_input_init = None     # all zero
     plant_state_init = None    # same as xbar
-    # sys = RobotsSystem(
-    #     x_init=plant_state_init,
-    #     u_init=plant_input_init,
-    #     linear_plant=args.linearize_plant,
-    #     k=args.spring_const,
-    #     n_agents=n_agents,
-    # ).to(device)
     
     sys = BumpercarSystem(
         params=car_params,
@@ -199,25 +147,23 @@ def main():
         )
 
 
-
 # ------------ 4. Loss ------------
-    Q = 20 * torch.kron(torch.eye(args.n_agents), torch.eye(2)).to(device)
-    Qs = 1 * torch.kron(torch.eye(args.n_agents), torch.eye(1)).to(device)
+    Q, Qs, alpha_col, alpha_obst, alpha_u, position_deadzone, steady_state_velocity_radius, min_dist = getLossParams(device)
     loss_fn = BumpercarLoss(
         Q=Q,
         Qs=Qs,
-        alpha_u=args.alpha_u,
+        alpha_u=alpha_u,
         xbar=train_data[0, :, 14:],
         loss_bound=None,
         sat_bound=None,
-        alpha_col=args.alpha_col,
-        alpha_obst=args.alpha_obst,
+        alpha_col=alpha_col,
+        alpha_obst=alpha_obst,
         obstacle_centers=obstacle_centers,
         obstacle_covs=obstacle_covs,
-        min_dist=args.min_dist if args.col_av else None,
-        n_agents=sys.n_agents,
-        position_deadzone=0.01,
-        steady_state_velocity_radius=0.15,
+        min_dist=min_dist,
+        n_agents=n_agents,
+        position_deadzone=position_deadzone,
+        steady_state_velocity_radius=steady_state_velocity_radius,
     )
  
 # ------------ 5. Optimizer ------------
@@ -236,23 +182,19 @@ def main():
 
 
     nx = 7 * n_agents
+    
     data_verif = torch.zeros(3, args.horizon + 200, 2 * nx)
-
     data_verif[:, 0:1, :nx] = dataset.x0.view(1, 1, -1)
-
-    data_verif[0:1, :, nx:] = xbar_train.view(1, 1, -1)
-    data_verif[1:2, :, nx:] = xbar_verif2.view(1, 1, -1)
-    data_verif[2:3, :, nx:] = xbar_verif3.view(1, 1, -1)
-
+    data_verif[0:1, :, nx:] = x0_bumpercar.view(1, 1, -1)
+    data_verif[1:2, :, nx:] = x0_bumpercar.view(1, 1, -1)
+    data_verif[2:3, :, nx:] = x0_bumpercar.view(1, 1, -1)
     data_verif = data_verif.to(device)
-
     pid_only_ctl = ZeroController(ref_dim=2 * n_agents).to(device)
-
     x_verif, _, u_verif = sys.rollout(pid_only_ctl, data_verif)
     
     plot_trajectories(
         x_verif[0, :, :],
-        xbar=xbar_train,
+        xbar=x0_bumpercar,
         n_agents=sys.n_agents,
         save_folder=save_folder,
         filename='Only PID.pdf',
@@ -262,30 +204,7 @@ def main():
         obstacle_covs=loss_fn.obstacle_covs,
     )
     
-    # Trained Performance Boosting controller
-    # ctl.eval()
-
-    # with torch.no_grad():
-    #     x_verif_pb, _, u_verif_pb = sys.rollout(ctl, data_verif)
-
-    # gif_root = save_folder
-    # frame_folder = os.path.join(gif_root, "frames_perfboosting_train_ref")
-    # gif_filename = os.path.join(gif_root, "Trained PerfBoosting.gif")
-
-    # T = x_verif_pb.shape[1]
-    # save_trajectory_frames(
-    #     x=x_verif_pb[0, :, :],
-    #     xbar=xbar_train,
-    #     n_agents=sys.n_agents,
-    #     save_folder=frame_folder,
-    #     T=T,
-    #     interval=5,          # increase to 2, 5, etc. if it is too slow
-    #     obstacle_centers=loss_fn.obstacle_centers,
-    #     obstacle_covs=loss_fn.obstacle_covs,
-    # )
-
-
-
+ 
     logger.info('\n------------ Begin training ------------')
     best_valid_loss = 1e6
     t = time.time()
@@ -393,138 +312,138 @@ def main():
     logger.info(msg)
 
 
-    # plot closed-loop trajectories using the trained controller
-    logger.info('Plotting closed-loop trajectories using the trained controller...')
-    x_log, _, u_log = sys.rollout(ctl, plot_data)
-    plot_trajectories(
-        x_log[0, :, :],  # remove extra dim due to batching
-        xbar=plot_data[0, min(5, plot_data.shape[1] - 1), nx:],
-        n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_trained.pdf',
-        text="CL - trained controller",
-        T=t_ext,
-        obstacle_centers=loss_fn.obstacle_centers,
-        obstacle_covs=loss_fn.obstacle_covs,
-    )
+#     # plot closed-loop trajectories using the trained controller
+#     logger.info('Plotting closed-loop trajectories using the trained controller...')
+#     x_log, _, u_log = sys.rollout(ctl, plot_data)
+#     plot_trajectories(
+#         x_log[0, :, :],  # remove extra dim due to batching
+#         xbar=plot_data[0, min(5, plot_data.shape[1] - 1), nx:],
+#         n_agents=sys.n_agents,
+#         save_folder=save_folder,
+#         filename='CL_trained.pdf',
+#         text="CL - trained controller",
+#         T=t_ext,
+#         obstacle_centers=loss_fn.obstacle_centers,
+#         obstacle_covs=loss_fn.obstacle_covs,
+#     )
 
-    x_verif, _, u_verif = sys.rollout(ctl, data_verif)
-    v_verif = sys.v_log
-    plot_trajectories(
-        x_verif[0, :, :],  # remove extra dim due to batching
-        xbar=xbar_train,
-        n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_diag_trained.pdf',
-        text="rPB - trained controller",
-        T=t_ext,
-        obstacle_centers=loss_fn.obstacle_centers,
-        obstacle_covs=loss_fn.obstacle_covs,
-    )
+#     x_verif, _, u_verif = sys.rollout(ctl, data_verif)
+#     v_verif = sys.v_log
+#     plot_trajectories(
+#         x_verif[0, :, :],  # remove extra dim due to batching
+#         xbar=xbar_train,
+#         n_agents=sys.n_agents,
+#         save_folder=save_folder,
+#         filename='CL_diag_trained.pdf',
+#         text="rPB - trained controller",
+#         T=t_ext,
+#         obstacle_centers=loss_fn.obstacle_centers,
+#         obstacle_covs=loss_fn.obstacle_covs,
+#     )
 
-    plot_trajectories(
-        x_verif[1, :, :],  # remove extra dim due to batching
-        xbar=xbar_verif2,
-        n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_direct_trained.pdf',
-        text="rPB - trained controller",
-        T=t_ext,
-        obstacle_centers=loss_fn.obstacle_centers,
-        obstacle_covs=loss_fn.obstacle_covs,
-    )
+#     plot_trajectories(
+#         x_verif[1, :, :],  # remove extra dim due to batching
+#         xbar=xbar_verif2,
+#         n_agents=sys.n_agents,
+#         save_folder=save_folder,
+#         filename='CL_direct_trained.pdf',
+#         text="rPB - trained controller",
+#         T=t_ext,
+#         obstacle_centers=loss_fn.obstacle_centers,
+#         obstacle_covs=loss_fn.obstacle_covs,
+#     )
 
-    plot_trajectories(
-        x_verif[2, :, :],  # remove extra dim due to batching
-        xbar=xbar_verif3,
-        n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_center_trained.pdf',
-        text="CL - trained controller",
-        T=t_ext,
-        obstacle_centers=loss_fn.obstacle_centers,
-        obstacle_covs=loss_fn.obstacle_covs,
-    )
-
-
-
-#### Plot the evolution of the reference over time for the diagonal scenario ####
-    x_ref_evol = torch.zeros(1, args.horizon + 200, 14)
-    x_ref_evol[:, :, 0:2] = u_verif[0:1, :, 0:2]
-    x_ref_evol[:, :, 4:6] = u_verif[0:1, :, 2:4]
-    x_ref_evol = x_ref_evol + xbar_train
+#     plot_trajectories(
+#         x_verif[2, :, :],  # remove extra dim due to batching
+#         xbar=xbar_verif3,
+#         n_agents=sys.n_agents,
+#         save_folder=save_folder,
+#         filename='CL_center_trained.pdf',
+#         text="CL - trained controller",
+#         T=t_ext,
+#         obstacle_centers=loss_fn.obstacle_centers,
+#         obstacle_covs=loss_fn.obstacle_covs,
+#     )
 
 
 
-    plot_trajectories(
-        x_ref_evol[0, :, :],  # remove extra dim due to batching
-        xbar=xbar_train,
-        n_agents=sys.n_agents,
-        save_folder=save_folder,
-        filename='CL_xbar_evolution.pdf',
-        text="CL - evolution of the reference",
-        T=t_ext,
-        dots=True,
-        obstacle_centers=loss_fn.obstacle_centers,
-        obstacle_covs=loss_fn.obstacle_covs,
-    )
+# #### Plot the evolution of the reference over time for the diagonal scenario ####
+#     x_ref_evol = torch.zeros(1, args.horizon + 200, 14)
+#     x_ref_evol[:, :, 0:2] = u_verif[0:1, :, 0:2]
+#     x_ref_evol[:, :, 4:6] = u_verif[0:1, :, 2:4]
+#     x_ref_evol = x_ref_evol + xbar_train
 
 
-# Create a figure with a 2x2 grid of subplots
-    fig, axs = plt.subplots(2, 1, figsize=(10, 7))
-    axs[0].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 0], label="dX")
-    axs[0].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 1], label="dY")
-    axs[0].set_title("Robot 1")
-    axs[0].set_xlabel("Time (s)")
-    axs[0].set_ylabel("Delta ref")
-    axs[0].legend()
-    axs[0].grid()
 
-    axs[1].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 2], label="dX")
-    axs[1].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 3], label="dY")
-    axs[1].set_title("Robot 2")
-    axs[1].set_xlabel("Time (s)")
-    axs[1].set_ylabel("Delta ref")
-    axs[1].legend()
-    axs[1].grid()
-
-    # Adjust layout to prevent overlap
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)  # Adjust the top space to make room for the suptitle
-
-    plt.suptitle(
-        'Performance boosting offset to the reference over time \n for the diagonal scenario',
-        fontsize=13,
-    )
-    plt.savefig(os.path.join(save_folder, "U_over_time.pdf"))
-    plt.close()
+#     plot_trajectories(
+#         x_ref_evol[0, :, :],  # remove extra dim due to batching
+#         xbar=xbar_train,
+#         n_agents=sys.n_agents,
+#         save_folder=save_folder,
+#         filename='CL_xbar_evolution.pdf',
+#         text="CL - evolution of the reference",
+#         T=t_ext,
+#         dots=True,
+#         obstacle_centers=loss_fn.obstacle_centers,
+#         obstacle_covs=loss_fn.obstacle_covs,
+#     )
 
 
-# Create a figure with a 2x2 grid of subplots
-    fig, axs = plt.subplots(2, 1, figsize=(10, 7))
-    axs[0].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 0], label="v_X")
-    axs[0].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 1], label="v_Y")
-    axs[0].set_title("Robot 1")
-    axs[0].set_xlabel("Time (s)")
-    axs[0].set_ylabel("v")
-    axs[0].legend()
-    axs[0].grid()
+# # Create a figure with a 2x2 grid of subplots
+#     fig, axs = plt.subplots(2, 1, figsize=(10, 7))
+#     axs[0].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 0], label="dX")
+#     axs[0].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 1], label="dY")
+#     axs[0].set_title("Robot 1")
+#     axs[0].set_xlabel("Time (s)")
+#     axs[0].set_ylabel("Delta ref")
+#     axs[0].legend()
+#     axs[0].grid()
 
-    axs[1].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 2], label="v_X")
-    axs[1].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 3], label="v_Y")
-    axs[1].set_title("Robot 2")
-    axs[1].set_xlabel("Time (s)")
-    axs[1].set_ylabel("v")
-    axs[1].legend()
-    axs[1].grid()
+#     axs[1].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 2], label="dX")
+#     axs[1].plot(np.array(range(u_verif.shape[1])), u_verif[2, :, 3], label="dY")
+#     axs[1].set_title("Robot 2")
+#     axs[1].set_xlabel("Time (s)")
+#     axs[1].set_ylabel("Delta ref")
+#     axs[1].legend()
+#     axs[1].grid()
 
-    # Adjust layout to prevent overlap
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)  # Adjust the top space to make room for the suptitle
+#     # Adjust layout to prevent overlap
+#     plt.tight_layout()
+#     plt.subplots_adjust(top=0.9)  # Adjust the top space to make room for the suptitle
 
-    plt.suptitle('Integral variable over time \n for the diagonal scenario', fontsize=13)
-    plt.savefig(os.path.join(save_folder, "V_over_time.pdf"))
-    plt.close()
+#     plt.suptitle(
+#         'Performance boosting offset to the reference over time \n for the diagonal scenario',
+#         fontsize=13,
+#     )
+#     plt.savefig(os.path.join(save_folder, "U_over_time.pdf"))
+#     plt.close()
+
+
+# # Create a figure with a 2x2 grid of subplots
+#     fig, axs = plt.subplots(2, 1, figsize=(10, 7))
+#     axs[0].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 0], label="v_X")
+#     axs[0].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 1], label="v_Y")
+#     axs[0].set_title("Robot 1")
+#     axs[0].set_xlabel("Time (s)")
+#     axs[0].set_ylabel("v")
+#     axs[0].legend()
+#     axs[0].grid()
+
+#     axs[1].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 2], label="v_X")
+#     axs[1].plot(np.array(range(u_verif.shape[1])), v_verif[0, :, 3], label="v_Y")
+#     axs[1].set_title("Robot 2")
+#     axs[1].set_xlabel("Time (s)")
+#     axs[1].set_ylabel("v")
+#     axs[1].legend()
+#     axs[1].grid()
+
+#     # Adjust layout to prevent overlap
+#     plt.tight_layout()
+#     plt.subplots_adjust(top=0.9)  # Adjust the top space to make room for the suptitle
+
+#     plt.suptitle('Integral variable over time \n for the diagonal scenario', fontsize=13)
+#     plt.savefig(os.path.join(save_folder, "V_over_time.pdf"))
+#     plt.close()
 
 
 if __name__ == "__main__":

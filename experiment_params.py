@@ -2,8 +2,6 @@ import torch
 
 from experiments.robots.arg_parser import argument_parser
 
-
-
 STD_INIT_XY = 1.0
 STD_INIT_THETA = 10/360*2*torch.pi
 args = argument_parser()
@@ -24,7 +22,7 @@ def getCarInitParams(device):
         torch.tensor([[-1.375, 0]], device=device),
         torch.tensor([[1.375, 0.0]], device=device),
     ]
-    obstacle_covs = [torch.tensor([[0.05, 0.05]], device=device)] * len(obstacle_centers)
+    obstacle_covs = [torch.tensor([[0.10, 0.10]], device=device)] * len(obstacle_centers)
     
     car_init_radius = 1.0
     std_init_theta = STD_INIT_THETA

@@ -20,9 +20,11 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 
 # Add your trained pRB checkpoint here. Prefer a checkpoint with MLP weights, e.g.
 # "experiments/robots/saved_results/perf_boost_XX_XX_XX_XX_XX/checkpoints/checkpoint_latest.pt"
-TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_smoother_traj.pt"
+# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_smoother_traj.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_zero_collisions.pt"
-# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00050.pt"
+# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
+TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00095.pt"
+
 
 EVALUATE_MODEL = True
 EVAL_HORIZON = 100
@@ -31,8 +33,9 @@ EVAL_NUM_TEST_ROLLOUTS = 500
 EVAL_RANDOM_SEED = 5
 
 SIM_USE_GENERATED_SAMPLE = True
-SIM_SAMPLE_INDEX = 6
-SIM_RANDOM_SEED = 11
+SIM_SAMPLE_INDEX = 62
+SIM_RANDOM_SEED = 12
+OBSTACLE_RADIUS = 0.625
 
 
 
@@ -106,6 +109,25 @@ def make_loss_fn(train_data, n_agents=2):
     )
 
 
+def obstacle_collision_indices(x_log, obstacle_centers, radius=OBSTACLE_RADIUS, n_agents=2):
+    collision_indices = set()
+    radius_sq = radius ** 2
+
+    for agent_idx in range(n_agents):
+        base = 7 * agent_idx
+        positions = x_log[:, :, base:base + 2]
+
+        for obstacle_idx, center in enumerate(obstacle_centers):
+            center = center.to(device=positions.device, dtype=positions.dtype).view(1, 1, 2)
+            distance_sq = torch.sum((positions - center) ** 2, dim=-1)
+            colliding = distance_sq <= radius_sq
+
+            for rollout_idx, _ in colliding.nonzero(as_tuple=False):
+                collision_indices.add(int(rollout_idx))
+
+    return sorted(collision_indices)
+
+
 def checkpoint_args(checkpoint):
     args = checkpoint.get("args", {})
     return args if isinstance(args, dict) else vars(args)
@@ -163,17 +185,30 @@ def evaluate_controller():
     loss_fn = make_loss_fn(train_data, n_agents=system.n_agents)
 
     print(f"[INFO] evaluating {TRAINED_PBR_MODEL_PATH}")
+    _, _, obstacle_centers, _, _, _ = getCarInitParams(device)
     with torch.no_grad():
         x_log, e_log, u_log = system.rollout(controller, train_data, train=False)
         train_loss = loss_fn.forward(x_log, u_log, e_log).item()
         train_collisions = loss_fn.count_collisions(x_log)
+        train_obstacle_collision_indices = obstacle_collision_indices(
+            x_log,
+            obstacle_centers,
+            n_agents=system.n_agents,
+        )
 
         x_log, e_log, u_log = system.rollout(controller, test_data, train=False)
         test_loss = loss_fn.forward(x_log, u_log, e_log).item()
         test_collisions = loss_fn.count_collisions(x_log)
+        test_obstacle_collision_indices = obstacle_collision_indices(
+            x_log,
+            obstacle_centers,
+            n_agents=system.n_agents,
+        )
 
     print(f"Train loss: {train_loss:.4f} -- Number of collisions = {train_collisions:.0f}")
     print(f"Test loss: {test_loss:.4f} -- Number of collisions = {test_collisions:.0f}")
+    print(f"Train obstacle collision indices: {train_obstacle_collision_indices}")
+    print(f"Test obstacle collision indices: {test_obstacle_collision_indices}")
 
 
 def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_index=SIM_SAMPLE_INDEX):
@@ -204,6 +239,14 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
     with torch.no_grad():
         x_log, _, _ = system.rollout(controller, data, train=False)
 
+    _, _, obstacle_centers, _, _, _ = getCarInitParams(device)
+    sim_obstacle_collision_indices = obstacle_collision_indices(
+        x_log,
+        obstacle_centers,
+        n_agents=system.n_agents,
+    )
+    # print(f"Sim obstacle collision indices: {sim_obstacle_collision_indices}")
+
     return x_log[0].detach().cpu(), xbar.cpu(), title
 
 
@@ -225,7 +268,7 @@ def draw_obstacles(ax, obstacle_centers, obstacle_covs):
 
         circle = Circle(
             xy=(center[0].item(), center[1].item()),
-            radius=0.625,
+            radius=OBSTACLE_RADIUS,
             facecolor="0.35",
             edgecolor="black",
             alpha=0.25,

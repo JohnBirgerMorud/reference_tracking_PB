@@ -44,6 +44,10 @@ class BumpercarLoss(LQLossFH):
         # mask
         self.mask = torch.logical_not(torch.eye(self.n_agents, device=device))   # shape = (n_agents, n_agents)
 
+        self.arena_bounds = ((-3.5, 3.5), (-4.0, 6.0))
+        self.arena_margin = 0.4  # car radius / safety buffer
+        self.alpha_bounds = 1e4  # tune relative to alpha_obst
+
     def forward(self, xs, us,es):
         """
         Compute loss.
@@ -86,6 +90,9 @@ class BumpercarLoss(LQLossFH):
         )   # shape = (S, T, 1, 1)
         loss_speed = torch.sum(sTQs, 1) / speed.shape[1] 
 
+        loss_bounds = self.alpha_bounds * self.f_loss_bounds(x_batch)
+        
+        
         # loss control actions = 1/T sum_{t=1}^T u_t^T R u_t
         uTRu = self.R * torch.matmul(
             u_batch.transpose(-1, -2),
@@ -103,7 +110,7 @@ class BumpercarLoss(LQLossFH):
         else:
             loss_obst = self.alpha_obst * self.f_loss_obst(x_batch) # shape = (S, 1, 1)
         # sum up all losses
-        loss_val = loss_x + loss_u + loss_ca + loss_obst + loss_speed           # shape = (S, 1, 1)
+        loss_val = loss_x + loss_u + loss_ca + loss_obst + loss_speed + loss_bounds          # shape = (S, 1, 1)
         # bound
         if self.sat_bound is not None:
             loss_val = torch.tanh(loss_val/self.sat_bound)  # shape = (S, 1, 1)
@@ -132,6 +139,22 @@ class BumpercarLoss(LQLossFH):
         e_agents = es.reshape(es.shape[0], es.shape[1], self.n_agents, 2)
         distance = torch.linalg.norm(e_agents, dim=-1, keepdim=True)
         return (distance <= self.steady_state_velocity_radius)
+    
+    def f_loss_bounds(self, x_batched):
+        qx = x_batched[:, :, 0::7, :]
+        qy = x_batched[:, :, 1::7, :]
+
+        x_min, x_max = self.arena_bounds[0]
+        y_min, y_max = self.arena_bounds[1]
+        margin = self.arena_margin
+
+        left = torch.relu((x_min + margin) - qx)
+        right = torch.relu(qx - (x_max - margin))
+        bottom = torch.relu((y_min + margin) - qy)
+        top = torch.relu(qy - (y_max - margin))
+
+        loss = left**2 + right**2 + bottom**2 + top**2
+        return loss.mean(dim=(1, 2, 3)).reshape(-1, 1, 1)
     
     def f_loss_obst(self, x_batched):
         """

@@ -128,10 +128,11 @@ class BumpercarLoss(LQLossFH):
 
         e_agents = e_batch.reshape(e_batch.shape[0], e_batch.shape[1], self.n_agents, 7, 1)
         position_error = e_agents[:, :, :, 0:2, :]
+        other_error = e_agents[:, :, :, 2:, :]
         distance = torch.linalg.norm(position_error, dim=3, keepdim=True)
         scale = torch.clamp(distance - self.position_deadzone, min=0.0) / (distance + 1e-6)
-        e_agents[:, :, :, 0:2, :] = position_error * scale
-        return e_agents.reshape_as(e_batch)
+        position_error = position_error * scale
+        return torch.cat((position_error, other_error), dim=3).reshape_as(e_batch)
 
     def get_steady_state_velocity_mask(self, es):
         e_agents = es.reshape(es.shape[0], es.shape[1], self.n_agents, 7)

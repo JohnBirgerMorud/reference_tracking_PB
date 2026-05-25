@@ -38,7 +38,7 @@ def getCarFinalParams():
 
 def getLossParams(device):
     Q_agent = torch.diag(torch.tensor([
-        10.0, 10.0, 0.0, 0.0, 0.0, 0.0, 2.0
+        10.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0
     ], device=device))
     Q = torch.kron(torch.eye(n_agents, device=device), Q_agent)
     Qs = torch.kron(torch.eye(n_agents), torch.eye(1)).to(device)

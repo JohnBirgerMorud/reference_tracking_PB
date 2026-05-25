@@ -25,6 +25,7 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
 TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00100.pt"
+# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/trained_controller_loss227_trueArena.pt"
 
 EVALUATE_MODEL = True
 EVAL_HORIZON = 100
@@ -37,6 +38,7 @@ SIM_SAMPLE_INDEX = 5
 SIM_RANDOM_SEED = 5
 OBSTACLE_RADIUS = 0.625
 
+DT = 0.1
 
 
 def make_generated_sample_data(horizon, sample_index=0, random_seed=11):
@@ -176,7 +178,7 @@ def evaluate_controller():
         params=car_params,
         x_init=None,
         u_init=None,
-        dt=0.04,
+        dt=DT,
     ).to(device)
     controller = load_controller(system, TRAINED_PBR_MODEL_PATH)
     train_data, test_data = make_eval_data(
@@ -219,7 +221,7 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
         params=car_params,
         x_init=None,
         u_init=None,
-        dt = 0.04,
+        dt = DT,
     ).to(device)
 
     if TRAINED_PBR_MODEL_PATH:

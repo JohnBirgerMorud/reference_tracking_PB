@@ -315,7 +315,7 @@ class BumpercarSystem(nn.Module):
 
             u = controller(x, v, xbar[:, t:t + 1, :])
 
-            e = xbar[:, t:t + 1, :] - x[:, :, self.pos_indices()]
+            e = ref[:, t:t + 1, :] - x
 
             if t == 0:
                 x_log, u_log, v_log, e_log = x, u, v, e

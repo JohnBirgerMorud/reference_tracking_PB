@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from config import device
+# from config import device
 from utils.assistive_functions import to_tensor
 
 

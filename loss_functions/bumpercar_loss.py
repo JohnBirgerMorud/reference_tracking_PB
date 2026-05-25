@@ -48,6 +48,8 @@ class BumpercarLoss(LQLossFH):
         self.arena_margin = 0.4  # car radius / safety buffer
         self.alpha_bounds = 1e4  # tune relative to alpha_obst
 
+        assert self.Q.shape[0] == 7 * self.n_agents
+
     def forward(self, xs, us,es):
         """
         Compute loss.
@@ -124,20 +126,16 @@ class BumpercarLoss(LQLossFH):
         if self.position_deadzone <= 0:
             return e_batch
 
-        e_agents = e_batch.reshape(
-            e_batch.shape[0],
-            e_batch.shape[1],
-            self.n_agents,
-            2,
-            1,
-        )
-        distance = torch.linalg.norm(e_agents, dim=3, keepdim=True)
+        e_agents = e_batch.reshape(e_batch.shape[0], e_batch.shape[1], self.n_agents, 7, 1)
+        position_error = e_agents[:, :, :, 0:2, :]
+        distance = torch.linalg.norm(position_error, dim=3, keepdim=True)
         scale = torch.clamp(distance - self.position_deadzone, min=0.0) / (distance + 1e-6)
-        return (e_agents * scale).reshape_as(e_batch)
+        e_agents[:, :, :, 0:2, :] = position_error * scale
+        return e_agents.reshape_as(e_batch)
 
     def get_steady_state_velocity_mask(self, es):
-        e_agents = es.reshape(es.shape[0], es.shape[1], self.n_agents, 2)
-        distance = torch.linalg.norm(e_agents, dim=-1, keepdim=True)
+        e_agents = es.reshape(es.shape[0], es.shape[1], self.n_agents, 7)
+        distance = torch.linalg.norm(e_agents[:, :, :, 0:2], dim=-1, keepdim=True)
         return (distance <= self.steady_state_velocity_radius)
     
     def f_loss_bounds(self, x_batched):

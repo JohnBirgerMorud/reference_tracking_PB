@@ -58,13 +58,14 @@ def main():
 
     # ------------ 1. Dataset ------------
     # [x, y, theta, vf, beta_f, beta_r, delta] for each car    
-    x0_bumpercar, _, obstacle_centers, obstacle_covs, car_init_radius, std_init_theta = getCarInitParams(device)
+    x0_bumpercar, x_final_bumpercar, obstacle_centers, obstacle_covs, car_init_radius, std_init_theta = getCarInitParams(device)
     x_final_limit, y_final_limit, final_car_min_dist = getCarFinalParams()
     
     dataset = BumpercarDataset(
         random_seed=args.random_seed,
         horizon=args.horizon,
         x0=x0_bumpercar,
+        x_final=x_final_bumpercar,
         car_init_radius=car_init_radius,
         x_final_limit=x_final_limit,
         y_final_limit=y_final_limit,
@@ -98,6 +99,7 @@ def main():
         params=car_params,
         x_init=plant_state_init,
         u_init=plant_input_init,
+        dt=0.04
     ).to(device)
 
 # ------------ 3. Controller ------------

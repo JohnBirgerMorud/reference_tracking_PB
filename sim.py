@@ -23,8 +23,8 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_smoother_traj.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_zero_collisions.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
-TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00095.pt"
-
+# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
+TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00100.pt"
 
 EVALUATE_MODEL = True
 EVAL_HORIZON = 100
@@ -33,8 +33,8 @@ EVAL_NUM_TEST_ROLLOUTS = 500
 EVAL_RANDOM_SEED = 5
 
 SIM_USE_GENERATED_SAMPLE = True
-SIM_SAMPLE_INDEX = 62
-SIM_RANDOM_SEED = 12
+SIM_SAMPLE_INDEX = 5
+SIM_RANDOM_SEED = 5
 OBSTACLE_RADIUS = 0.625
 
 
@@ -62,17 +62,19 @@ def make_crossing_data(horizon, n_agents=2, ):
     
     data[:, 0, :nx] = x0_bumpercar
     data[:, :, nx:] = x_final_bumpercar.view(1, 1, -1)
+    
     return data.to(device), x_final_bumpercar
 
 
 def make_eval_data(horizon, num_rollouts, num_test_rollouts, random_seed):
-    x0_bumpercar, _ , _ , _, car_init_radius, std_init_theta = getCarInitParams(device)
+    x0_bumpercar, x_final_bumpercar, _ , _, car_init_radius, std_init_theta = getCarInitParams(device)
     x_final_limit, y_final_limit, final_car_min_dist = getCarFinalParams()
     
     dataset = BumpercarDataset(
         random_seed=random_seed,
         horizon=horizon,
         x0=x0_bumpercar,
+        x_final=x_final_bumpercar,
         car_init_radius=car_init_radius,
         x_final_limit=x_final_limit,
         y_final_limit=y_final_limit,
@@ -174,6 +176,7 @@ def evaluate_controller():
         params=car_params,
         x_init=None,
         u_init=None,
+        dt=0.04,
     ).to(device)
     controller = load_controller(system, TRAINED_PBR_MODEL_PATH)
     train_data, test_data = make_eval_data(
@@ -216,6 +219,7 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
         params=car_params,
         x_init=None,
         u_init=None,
+        dt = 0.04,
     ).to(device)
 
     if TRAINED_PBR_MODEL_PATH:

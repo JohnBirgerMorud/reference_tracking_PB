@@ -24,7 +24,7 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_zero_collisions.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
-TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00100.pt"
+TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00180.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/trained_controller_loss227_trueArena.pt"
 
 EVALUATE_MODEL = True
@@ -33,12 +33,12 @@ EVAL_NUM_ROLLOUTS = 100
 EVAL_NUM_TEST_ROLLOUTS = 500
 EVAL_RANDOM_SEED = 5
 
-SIM_USE_GENERATED_SAMPLE = True
-SIM_SAMPLE_INDEX = 5
+SIM_USE_GENERATED_SAMPLE = False
+SIM_SAMPLE_INDEX = 7
 SIM_RANDOM_SEED = 5
-OBSTACLE_RADIUS = 0.625
+OBSTACLE_RADIUS = 1
 
-DT = 0.1
+DT = 0.04
 
 
 def make_generated_sample_data(horizon, sample_index=0, random_seed=11):

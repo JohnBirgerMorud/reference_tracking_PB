@@ -46,7 +46,7 @@ class BumpercarLoss(LQLossFH):
 
         self.arena_bounds = ((-3.5, 3.5), (-4.0, 6.0))
         self.arena_margin = 0.4  # car radius / safety buffer
-        self.alpha_bounds = 1e4  # tune relative to alpha_obst
+        self.alpha_bounds = 1e4 * 0  # tune relative to alpha_obst
 
         assert self.Q.shape[0] == 7 * self.n_agents
 

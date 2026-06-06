@@ -150,9 +150,10 @@ def main():
 
 
 # ------------ 4. Loss ------------
-    Q, Qs, alpha_col, alpha_obst, alpha_u, position_deadzone, steady_state_velocity_radius, min_dist = getLossParams(device)
+    Q, Q_final, Qs, alpha_col, alpha_obst, alpha_u, position_deadzone, steady_state_velocity_radius, min_dist = getLossParams(device)
     loss_fn = BumpercarLoss(
         Q=Q,
+        Q_final=Q_final,
         Qs=Qs,
         alpha_u=alpha_u,
         xbar=train_data[0, :, 14:],
@@ -252,6 +253,7 @@ def main():
                 "mlp_state_dict": ctl.MLP.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "Q": Q,
+                "Q_final": Q_final,
                 "args": vars(args),
                 "train_loss": loss.detach().item(),
                 "validation_loss": loss_valid_value,

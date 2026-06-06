@@ -5,7 +5,7 @@ from config import device
 
 class BumpercarLoss(LQLossFH):
     def __init__(
-        self, xbar, Q,Qs, alpha_u=1,
+        self, xbar, Q, Qs, Q_final=None, alpha_u=1,
         alpha_col=None, alpha_obst=None,
         loss_bound=None, sat_bound=None,
         n_agents=2, min_dist=0.5,
@@ -16,6 +16,7 @@ class BumpercarLoss(LQLossFH):
     ):
         super().__init__(Q=Q, R=alpha_u, loss_bound=loss_bound, sat_bound=sat_bound, xbar=None)
         self.Qs = Qs
+        self.Q_final = self.Q if Q_final is None else torch.as_tensor(Q_final, device=device)
         self.xbar = xbar
         self.n_agents = n_agents
         self.position_deadzone = position_deadzone
@@ -49,6 +50,7 @@ class BumpercarLoss(LQLossFH):
         self.alpha_bounds = 1e4 * 0  # tune relative to alpha_obst
 
         assert self.Q.shape[0] == 7 * self.n_agents
+        assert self.Q_final.shape == self.Q.shape
 
     def forward(self, xs, us,es):
         """
@@ -82,6 +84,10 @@ class BumpercarLoss(LQLossFH):
             e_batch
         )   # shape = (S, T, 1, 1)
         loss_x = torch.sum(xTQx, 1) / e_batch.shape[1]   # average over the time horizon. shape = (S, 1, 1)
+        loss_x_final = torch.matmul(
+            torch.matmul(e_batch[:, -1].transpose(-1, -2), self.Q_final),
+            e_batch[:, -1]
+        )   # shape = (S, 1, 1)
 
         if self.steady_state_velocity_radius is not None:
             speed = speed * self.get_steady_state_velocity_mask(es)
@@ -112,7 +118,7 @@ class BumpercarLoss(LQLossFH):
         else:
             loss_obst = self.alpha_obst * self.f_loss_obst(x_batch) # shape = (S, 1, 1)
         # sum up all losses
-        loss_val = loss_x + loss_u + loss_ca + loss_obst + loss_speed + loss_bounds          # shape = (S, 1, 1)
+        loss_val = loss_x + loss_x_final + loss_u + loss_ca + loss_obst + loss_speed + loss_bounds          # shape = (S, 1, 1)
         # bound
         if self.sat_bound is not None:
             loss_val = torch.tanh(loss_val/self.sat_bound)  # shape = (S, 1, 1)

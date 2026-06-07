@@ -3,7 +3,8 @@ import sys
 
 import matplotlib.pyplot as plt
 import torch
-from matplotlib.patches import Circle, Ellipse
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Ellipse, FancyArrowPatch
 from matplotlib.widgets import Slider
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,32 +25,42 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_zero_collisions.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
-TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00180.pt"
+TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/final_controllers_1.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/trained_controller_loss227_trueArena.pt"
 
 EVALUATE_MODEL = True
-EVAL_HORIZON = 100
+EVAL_HORIZON = 500
 EVAL_NUM_ROLLOUTS = 100
 EVAL_NUM_TEST_ROLLOUTS = 500
-EVAL_RANDOM_SEED = 5
+EVAL_RANDOM_SEED = 2
 
-SIM_USE_GENERATED_SAMPLE = False
-SIM_SAMPLE_INDEX = 7
-SIM_RANDOM_SEED = 5
-OBSTACLE_RADIUS = 1
+SIM_USE_GENERATED_SAMPLE = True
+SIM_DATA_SPLIT = "train"
+SIM_SAMPLE_INDEX = 32
+SIM_RANDOM_SEED = EVAL_RANDOM_SEED
+OBSTACLE_RADIUS = 1.5
+REPORT_FIGURE_PATH = "experiments/bumpercar/report_trajectory.svg"
+REPORT_FINAL_RADIUS = 1.0
 
 DT = 0.04
 
 
-def make_generated_sample_data(horizon, sample_index=0, random_seed=11):
+def make_generated_sample_data(horizon, sample_index=0, random_seed=11, split="train"):
     train_data, test_data = make_eval_data(
         horizon=horizon,
         num_rollouts=max(sample_index + 1, 1),
-        num_test_rollouts=1,
+        num_test_rollouts=max(sample_index + 1, 1),
         random_seed=random_seed,
     )
 
-    data = train_data[sample_index:sample_index + 1]
+    if split == "train":
+        source_data = train_data
+    elif split == "test":
+        source_data = test_data
+    else:
+        raise ValueError(f"Unknown generated sample split: {split}")
+
+    data = source_data[sample_index:sample_index + 1]
     nx = data.shape[-1] // 2
     xbar = data[0, 0, nx:]
 
@@ -93,10 +104,11 @@ def make_eval_data(horizon, num_rollouts, num_test_rollouts, random_seed):
 
 def make_loss_fn(train_data, n_agents=2):
     _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)    
-    Q, Qs, alpha_col, alpha_obst, alpha_u, position_deadzone, steady_state_velocity_radius, min_dist = getLossParams(device)
+    Q, Q_final, Qs, alpha_col, alpha_obst, alpha_u, position_deadzone, steady_state_velocity_radius, min_dist = getLossParams(device)
     
     return BumpercarLoss(
         Q=Q,
+        Q_final=Q_final,
         Qs=Qs,
         alpha_u=alpha_u,
         xbar=train_data[0, :, 14:],
@@ -236,8 +248,9 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
             horizon=horizon,
             sample_index=sample_index,
             random_seed=SIM_RANDOM_SEED,
+            split=SIM_DATA_SPLIT,
         )
-        title = f"{title} - generated sample {sample_index}"
+        title = f"{title} - {SIM_DATA_SPLIT} generated sample {sample_index}"
     else:
         data, xbar = make_crossing_data(horizon=horizon, n_agents=system.n_agents)
         title = f"{title} - fixed crossing"
@@ -257,8 +270,8 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
 
 
 def draw_car(ax, x, y, theta, color):
-    length = 0.55
-    width = 0.32
+    length = 0.30
+    width = 0.16
     dx = torch.tensor([length / 2, length / 2, -length / 2, -length / 2])
     dy = torch.tensor([width / 2, -width / 2, -width / 2, width / 2])
     c = torch.cos(theta)
@@ -266,6 +279,22 @@ def draw_car(ax, x, y, theta, color):
     px = x + c * dx - s * dy
     py = y + s * dx + c * dy
     return ax.fill(px, py, color=color, alpha=0.75, edgecolor="black", linewidth=1.0)[0]
+
+
+def draw_pose_arrow(ax, x, y, theta, color, length=0.45):
+    dx = length * torch.cos(theta).item()
+    dy = length * torch.sin(theta).item()
+    arrow = FancyArrowPatch(
+        (x.item(), y.item()),
+        (x.item() + dx, y.item() + dy),
+        arrowstyle="-|>",
+        mutation_scale=12,
+        color=color,
+        linewidth=1.2,
+        zorder=5,
+    )
+    ax.add_patch(arrow)
+    return arrow
 
 
 def draw_obstacles(ax, obstacle_centers, obstacle_covs):
@@ -284,9 +313,80 @@ def draw_obstacles(ax, obstacle_centers, obstacle_covs):
         ax.add_patch(circle)
 
 
+def draw_sample_regions(ax, colors):
+    x0_bumpercar, x_final, _, _, car_init_radius, _ = getCarInitParams(device)
+
+    for i, color in enumerate(colors):
+        base = 7 * i
+        init_circle = Circle(
+            xy=(x0_bumpercar[base].item(), x0_bumpercar[base + 1].item()),
+            radius=car_init_radius,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.10,
+            linewidth=1.2,
+            zorder=0,
+        )
+        final_circle = Circle(
+            xy=(x_final[base].item(), x_final[base + 1].item()),
+            radius=REPORT_FINAL_RADIUS,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.08,
+            linestyle="--",
+            linewidth=1.2,
+            zorder=0,
+        )
+        ax.add_patch(init_circle)
+        ax.add_patch(final_circle)
+
+
+def save_report_figure(path=REPORT_FIGURE_PATH):
+    x_log, xbar, _ = simulate()
+    _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
+    n_agents = 2
+    colors = ["tab:blue", "tab:orange"]
+
+    fig, ax = plt.subplots(figsize=(6.2, 7.0))
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(-3.5, 3.5)
+    ax.set_ylim(-4.0, 6.0)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.grid(True, alpha=0.25)
+
+    draw_sample_regions(ax, colors)
+    draw_obstacles(ax, obstacle_centers, obstacle_covs)
+
+    for i in range(n_agents):
+        base = 7 * i
+        color = colors[i]
+        ax.plot(x_log[:, base], x_log[:, base + 1], color=color, linewidth=2.0, linestyle="--")
+        ax.plot(x_log[0, base], x_log[0, base + 1], marker="o", markersize=6, color=color, fillstyle="none")
+        ax.plot(xbar[base], xbar[base + 1], marker="*", markersize=12, color=color)
+        draw_car(ax, x_log[-1, base], x_log[-1, base + 1], x_log[-1, base + 2], color)
+        draw_pose_arrow(ax, x_log[-1, base], x_log[-1, base + 1], x_log[-1, base + 2], color)
+
+    legend_handles = [
+        Line2D([0], [0], color="0.25", linewidth=2.0, linestyle="--", label="Trajectory"),
+        Line2D([0], [0], marker="o", color="0.25", linestyle="None", markersize=7, fillstyle="none", label="Initial position"),
+        Line2D([0], [0], marker="*", color="0.25", linestyle="None", markersize=12, label="Final target"),
+        Line2D([0], [0], marker="o", color="0.25", linestyle="None", markersize=13, fillstyle="none", label="Sample region"),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right", frameon=True, framealpha=0.95)
+
+    output_dir = os.path.dirname(path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    fig.savefig(path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] saved report figure to {path}")
+
+
 def show_simulation():
     x_log, xbar, title = simulate()
     _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
+    _, _, _, _, _, _, _, _, min_dist = getLossParams(device)
     n_agents = 2
     colors = ["tab:blue", "tab:orange"]
 
@@ -301,6 +401,7 @@ def show_simulation():
 
     path_lines = []
     car_patches = []
+    safety_patches = []
     target_markers = []
     start_markers = []
 
@@ -310,6 +411,16 @@ def show_simulation():
         (path_line,) = ax.plot([], [], color=color, linewidth=2)
         path_lines.append(path_line)
         car_patches.append(draw_car(ax, x_log[0, base], x_log[0, base + 1], x_log[0, base + 2], color))
+        safety_circle = Circle(
+            xy=(x_log[0, base].item(), x_log[0, base + 1].item()),
+            radius=min_dist / 2,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.08,
+            linewidth=1.0,
+        )
+        ax.add_patch(safety_circle)
+        safety_patches.append(safety_circle)
         target_markers.append(ax.plot(xbar[base], xbar[base + 1], marker="*", markersize=14, color=color)[0])
         start_markers.append(ax.plot(x_log[0, base], x_log[0, base + 1], marker="o", markersize=7, color=color, fillstyle="none")[0])
 
@@ -330,6 +441,7 @@ def show_simulation():
         for i in range(n_agents):
             base = 7 * i
             path_lines[i].set_data(x_log[:t + 1, base], x_log[:t + 1, base + 1])
+            safety_patches[i].center = (x_log[t, base].item(), x_log[t, base + 1].item())
             car_patches[i].remove()
             car_patches[i] = draw_car(
                 ax,
@@ -340,7 +452,10 @@ def show_simulation():
             )
 
         dist = torch.linalg.norm(x_log[t, 0:2] - x_log[t, 7:9]).item()
-        time_text.set_text(f"step {t}   distance {dist:.2f} m")
+        is_collision = dist < min_dist
+        time_text.set_color("tab:red" if is_collision else "black")
+        status = "collision" if is_collision else "clear"
+        time_text.set_text(f"step {t}   distance {dist:.2f} m   {status} < {min_dist:.2f} m")
         fig.canvas.draw_idle()
 
     time_slider.on_changed(update)

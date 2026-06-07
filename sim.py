@@ -4,7 +4,7 @@ import sys
 import matplotlib.pyplot as plt
 import torch
 from matplotlib.lines import Line2D
-from matplotlib.patches import Circle, Ellipse, FancyArrowPatch
+from matplotlib.patches import Circle, Ellipse, FancyArrowPatch, Polygon
 from matplotlib.widgets import Slider
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,21 +25,23 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_zero_collisions.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
-TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/final_controllers_1.pt"
+TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00460.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/trained_controller_loss227_trueArena.pt"
 
 EVALUATE_MODEL = True
 EVAL_HORIZON = 500
 EVAL_NUM_ROLLOUTS = 100
 EVAL_NUM_TEST_ROLLOUTS = 500
-EVAL_RANDOM_SEED = 2
+EVAL_RANDOM_SEED = 3
 
 SIM_USE_GENERATED_SAMPLE = True
 SIM_DATA_SPLIT = "train"
-SIM_SAMPLE_INDEX = 32
+SIM_SAMPLE_INDEX = 12
 SIM_RANDOM_SEED = EVAL_RANDOM_SEED
 OBSTACLE_RADIUS = 1.5
 REPORT_FIGURE_PATH = "experiments/bumpercar/report_trajectory.svg"
+REPORT_COLLISION_FIGURE_PATH = "experiments/bumpercar/report_collision.svg"
+REPORT_INIT_FIGURE_PATH = "experiments/bumpercar/report_setup.svg"
 REPORT_FINAL_RADIUS = 1.0
 
 DT = 0.04
@@ -192,6 +194,7 @@ def evaluate_controller():
         u_init=None,
         dt=DT,
     ).to(device)
+    
     controller = load_controller(system, TRAINED_PBR_MODEL_PATH)
     train_data, test_data = make_eval_data(
         horizon=EVAL_HORIZON,
@@ -297,6 +300,27 @@ def draw_pose_arrow(ax, x, y, theta, color, length=0.45):
     return arrow
 
 
+def collision_lens_points(center_a, center_b, radius, n_points=80):
+    ax, ay = center_a
+    bx, by = center_b
+    dx = bx - ax
+    dy = by - ay
+    distance = (dx**2 + dy**2) ** 0.5
+
+    if distance <= 0 or distance >= 2 * radius:
+        return []
+
+    angle = torch.atan2(torch.tensor(dy), torch.tensor(dx)).item()
+    half_angle = torch.acos(torch.tensor(distance / (2 * radius))).item()
+
+    angles_a = torch.linspace(angle - half_angle, angle + half_angle, n_points)
+    angles_b = torch.linspace(angle + torch.pi - half_angle, angle + torch.pi + half_angle, n_points)
+
+    arc_a = [(ax + radius * torch.cos(t).item(), ay + radius * torch.sin(t).item()) for t in angles_a]
+    arc_b = [(bx + radius * torch.cos(t).item(), by + radius * torch.sin(t).item()) for t in reversed(angles_b)]
+    return arc_a + arc_b
+
+
 def draw_obstacles(ax, obstacle_centers, obstacle_covs):
     for center, _ in zip(obstacle_centers, obstacle_covs):
         center = center.detach().cpu().flatten()
@@ -381,6 +405,156 @@ def save_report_figure(path=REPORT_FIGURE_PATH):
     fig.savefig(path, format="svg", bbox_inches="tight")
     plt.close(fig)
     print(f"[INFO] saved report figure to {path}")
+
+
+def save_collision_report_figure(path=REPORT_COLLISION_FIGURE_PATH):
+    _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
+    _, _, _, _, _, _, _, _, min_dist = getLossParams(device)
+    x0_bumpercar, x_final, _, _, _, _ = getCarInitParams(device)
+    n_agents = 2
+    colors = ["tab:blue", "tab:orange"]
+    safety_radius = min_dist / 2
+
+    collision_fractions = torch.tensor([0.425, 0.425])
+
+    fig, ax = plt.subplots(figsize=(6.2, 7.0))
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(-3.5, 3.5)
+    ax.set_ylim(-4.0, 6.0)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.grid(True, alpha=0.25)
+
+    draw_sample_regions(ax, colors)
+    draw_obstacles(ax, obstacle_centers, obstacle_covs)
+
+    centers = []
+    for i in range(n_agents):
+        base = 7 * i
+        color = colors[i]
+        start = x0_bumpercar[base:base + 2]
+        final = x_final[base:base + 2]
+        direction = final - start
+        collision = start + collision_fractions[i] * direction
+        theta = torch.atan2(direction[1], direction[0])
+        centers.append((collision[0].item(), collision[1].item()))
+
+        ax.plot(
+            [start[0].item(), final[0].item()],
+            [start[1].item(), final[1].item()],
+            color=color,
+            linewidth=2.0,
+            linestyle="--",
+            alpha=0.85,
+        )
+        ax.plot(start[0], start[1], marker="o", markersize=6, color=color, fillstyle="none")
+        ax.plot(final[0], final[1], marker="*", markersize=12, color=color)
+        safety_circle = Circle(
+            xy=(collision[0].item(), collision[1].item()),
+            radius=safety_radius,
+            facecolor="tab:red",
+            edgecolor="tab:red",
+            alpha=0.14,
+            linewidth=1.4,
+            zorder=2,
+        )
+        ax.add_patch(safety_circle)
+        draw_car(ax, collision[0], collision[1], theta, color)
+        draw_pose_arrow(ax, collision[0], collision[1], theta, color)
+
+    overlap = collision_lens_points(centers[0], centers[1], safety_radius)
+    if overlap:
+        ax.add_patch(
+            Polygon(
+                overlap,
+                closed=True,
+                facecolor="tab:red",
+                edgecolor="tab:red",
+                alpha=0.45,
+                linewidth=1.2,
+                zorder=3,
+            )
+        )
+
+    legend_handles = [
+        Line2D([0], [0], color="0.25", linewidth=2.0, linestyle="--", label="Trajectory"),
+        Line2D([0], [0], marker="o", color="0.25", linestyle="None", markersize=7, fillstyle="none", label="Initial position"),
+        Line2D([0], [0], marker="*", color="0.25", linestyle="None", markersize=12, label="Final target"),
+        Line2D([0], [0], marker="o", color="tab:red", linestyle="None", markersize=13, fillstyle="none", label="1 m safety radius"),
+        Line2D([0], [0], color="tab:red", linewidth=6, alpha=0.45, label="Collision overlap"),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right", frameon=True, framealpha=0.95)
+
+    output_dir = os.path.dirname(path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    fig.savefig(path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] saved collision report figure to {path}")
+
+
+def save_init_report_figure(path=REPORT_INIT_FIGURE_PATH):
+    x0_bumpercar, x_final, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
+    n_agents = 2
+    colors = ["tab:blue", "tab:orange"]
+
+    fig, ax = plt.subplots(figsize=(6.2, 7.0))
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(-3.5, 3.5)
+    ax.set_ylim(-4.0, 6.0)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.grid(True, alpha=0.25)
+
+    draw_sample_regions(ax, colors)
+    draw_obstacles(ax, obstacle_centers, obstacle_covs)
+
+    for i in range(n_agents):
+        base = 7 * i
+        color = colors[i]
+        ax.plot(
+            x0_bumpercar[base],
+            x0_bumpercar[base + 1],
+            marker="o",
+            markersize=7,
+            color=color,
+            fillstyle="none",
+        )
+        ax.plot(
+            x_final[base],
+            x_final[base + 1],
+            marker="*",
+            markersize=13,
+            color=color,
+        )
+        draw_car(
+            ax,
+            x0_bumpercar[base],
+            x0_bumpercar[base + 1],
+            x0_bumpercar[base + 2],
+            color,
+        )
+        draw_pose_arrow(
+            ax,
+            x0_bumpercar[base],
+            x0_bumpercar[base + 1],
+            x0_bumpercar[base + 2],
+            color,
+        )
+
+    legend_handles = [
+        Line2D([0], [0], marker="o", color="0.25", linestyle="None", markersize=7, fillstyle="none", label="Initial position"),
+        Line2D([0], [0], marker="*", color="0.25", linestyle="None", markersize=12, label="Final target"),
+        Line2D([0], [0], marker="o", color="0.25", linestyle="None", markersize=13, fillstyle="none", label="Sample region"),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right", frameon=True, framealpha=0.95)
+
+    output_dir = os.path.dirname(path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    fig.savefig(path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] saved init report figure to {path}")
 
 
 def show_simulation():

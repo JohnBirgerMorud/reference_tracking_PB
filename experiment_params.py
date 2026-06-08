@@ -9,8 +9,8 @@ n_agents = 2
 
 def getCarInitParams(device):
     x0_bumpercar = torch.tensor([
-            -2.0, -3.0, 0, 0.0, 0.0, 0.0, 0.0,   # car 1
-            2.0, -3.0, -torch.pi, 0.0, 0.0, 0.0, 0.0,   # car 2
+            -2.0, -2.5, 0, 0.0, 0.0, 0.0, 0.0,   # car 1
+            2.0, -2.5, -torch.pi, 0.0, 0.0, 0.0, 0.0,   # car 2
         ])
     
     x_final = torch.tensor([
@@ -24,7 +24,7 @@ def getCarInitParams(device):
     ]
     obstacle_covs = [torch.tensor([[0.44, 0.44]], device=device)] * len(obstacle_centers)
     
-    car_init_radius = 0.4
+    car_init_radius = 0.3
     std_init_theta = STD_INIT_THETA
     
     return x0_bumpercar, x_final, obstacle_centers, obstacle_covs, car_init_radius, std_init_theta
@@ -39,10 +39,10 @@ def getCarFinalParams():
 def getLossParams(device):
     Q_agent = torch.diag(torch.tensor([
         2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    ], device=device)) / 15
+    ], device=device)) / 5
     
     Q = torch.kron(torch.eye(n_agents, device=device), Q_agent)
-    Q_final = Q * 20
+    Q_final = Q * 5
     Qs = torch.kron(torch.eye(n_agents), torch.eye(1)).to(device)
 
     position_deadzone = 0.01

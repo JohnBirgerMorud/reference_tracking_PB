@@ -25,8 +25,9 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_zero_collisions.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
-TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00460.pt"
+# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00460.pt"
 # TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/trained_controller_loss227_trueArena.pt"
+TRAINED_PBR_MODEL_PATH="experiments/bumpercar/trained_pRB/rPB_best.pt"
 
 EVALUATE_MODEL = True
 EVAL_HORIZON = 500
@@ -42,6 +43,7 @@ OBSTACLE_RADIUS = 1.5
 REPORT_FIGURE_PATH = "experiments/bumpercar/report_trajectory.svg"
 REPORT_COLLISION_FIGURE_PATH = "experiments/bumpercar/report_collision.svg"
 REPORT_INIT_FIGURE_PATH = "experiments/bumpercar/report_setup.svg"
+REPORT_SNAPSHOT_FIGURE_PATH = "experiments/bumpercar/report_snapshots.svg"
 REPORT_FINAL_RADIUS = 1.0
 
 DT = 0.04
@@ -272,7 +274,7 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
     return x_log[0].detach().cpu(), xbar.cpu(), title
 
 
-def draw_car(ax, x, y, theta, color):
+def draw_car(ax, x, y, theta, color, alpha=0.75):
     length = 0.30
     width = 0.16
     dx = torch.tensor([length / 2, length / 2, -length / 2, -length / 2])
@@ -281,10 +283,10 @@ def draw_car(ax, x, y, theta, color):
     s = torch.sin(theta)
     px = x + c * dx - s * dy
     py = y + s * dx + c * dy
-    return ax.fill(px, py, color=color, alpha=0.75, edgecolor="black", linewidth=1.0)[0]
+    return ax.fill(px, py, color=color, alpha=alpha, edgecolor="black", linewidth=1.0)[0]
 
 
-def draw_pose_arrow(ax, x, y, theta, color, length=0.45):
+def draw_pose_arrow(ax, x, y, theta, color, length=0.45, alpha=1.0):
     dx = length * torch.cos(theta).item()
     dy = length * torch.sin(theta).item()
     arrow = FancyArrowPatch(
@@ -294,6 +296,7 @@ def draw_pose_arrow(ax, x, y, theta, color, length=0.45):
         mutation_scale=12,
         color=color,
         linewidth=1.2,
+        alpha=alpha,
         zorder=5,
     )
     ax.add_patch(arrow)
@@ -397,7 +400,18 @@ def save_report_figure(path=REPORT_FIGURE_PATH):
         Line2D([0], [0], marker="*", color="0.25", linestyle="None", markersize=12, label="Final target"),
         Line2D([0], [0], marker="o", color="0.25", linestyle="None", markersize=13, fillstyle="none", label="Sample region"),
     ]
-    ax.legend(handles=legend_handles, loc="upper right", frameon=True, framealpha=0.95)
+    ax.legend(
+        handles=legend_handles,
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
+        fontsize=8,
+        handlelength=1.6,
+        borderpad=0.35,
+        labelspacing=0.35,
+        handletextpad=0.55,
+        markerscale=0.75,
+    )
 
     output_dir = os.path.dirname(path)
     if output_dir:
@@ -405,6 +419,85 @@ def save_report_figure(path=REPORT_FIGURE_PATH):
     fig.savefig(path, format="svg", bbox_inches="tight")
     plt.close(fig)
     print(f"[INFO] saved report figure to {path}")
+
+
+def save_snapshot_report_figure(path=REPORT_SNAPSHOT_FIGURE_PATH):
+    x_log, xbar, _ = simulate()
+    _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
+    n_agents = 2
+    colors = ["tab:blue", "tab:orange"]
+    snapshot_idxs = [0, 30, 60, 120, 260]
+    snapshot_labels = ["1", "2", "3", "4", "5"]
+    snapshot_alphas = [0.30, 0.50, 0.65, 0.8, 0.9]
+
+    fig, ax = plt.subplots(figsize=(6.2, 7.0))
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(-3.5, 3.5)
+    ax.set_ylim(-4.0, 6.0)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.grid(True, alpha=0.25)
+
+    draw_sample_regions(ax, colors)
+    draw_obstacles(ax, obstacle_centers, obstacle_covs)
+
+    for i in range(n_agents):
+        base = 7 * i
+        color = colors[i]
+        ax.plot(x_log[:, base], x_log[:, base + 1], color=color, linewidth=1.8, linestyle="--", alpha=0.45)
+        ax.plot(x_log[0, base], x_log[0, base + 1], marker="o", markersize=6, color=color, fillstyle="none")
+        ax.plot(xbar[base], xbar[base + 1], marker="*", markersize=12, color=color)
+
+        for snapshot_idx, label, alpha in zip(snapshot_idxs, snapshot_labels, snapshot_alphas):
+            x = x_log[snapshot_idx, base]
+            y = x_log[snapshot_idx, base + 1]
+            theta = x_log[snapshot_idx, base + 2]
+            draw_car(ax, x, y, theta, color, alpha=alpha)
+            draw_pose_arrow(ax, x, y, theta, color, length=0.34, alpha=alpha)
+            label_offset = 0.26 if i == 0 else -0.26
+            ax.text(
+                x.item() + label_offset * torch.cos(theta + torch.pi / 2).item(),
+                y.item() + label_offset * torch.sin(theta + torch.pi / 2).item(),
+                label,
+                color=color,
+                fontsize=8,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                bbox={
+                    "boxstyle": "circle,pad=0.18",
+                    "facecolor": "white",
+                    "edgecolor": color,
+                    "linewidth": 0.9,
+                    "alpha": min(alpha + 0.10, 1.0),
+                },
+            )
+
+    legend_handles = [
+        Line2D([0], [0], color="0.25", linewidth=1.8, linestyle="--", label="Trajectory"),
+        Line2D([0], [0], marker="o", color="0.25", linestyle="None", markersize=7, fillstyle="none", label="Initial position"),
+        Line2D([0], [0], marker="*", color="0.25", linestyle="None", markersize=12, label="Final target"),
+        Line2D([0], [0], marker="s", color="0.25", linestyle="None", markersize=8, alpha=0.70, label="Snapshots 1-5"),
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
+        fontsize=8,
+        handlelength=1.6,
+        borderpad=0.35,
+        labelspacing=0.35,
+        handletextpad=0.55,
+        markerscale=0.75,
+    )
+
+    output_dir = os.path.dirname(path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    fig.savefig(path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] saved snapshot report figure to {path}")
 
 
 def save_collision_report_figure(path=REPORT_COLLISION_FIGURE_PATH):
@@ -638,6 +731,8 @@ def show_simulation():
 
 
 if __name__ == "__main__":
-    if EVALUATE_MODEL:
+    if EVALUATE_MODEL and TRAINED_PBR_MODEL_PATH:
         evaluate_controller()
+    elif EVALUATE_MODEL:
+        print("[INFO] skipping trained-model evaluation because TRAINED_PBR_MODEL_PATH is empty.")
     show_simulation()

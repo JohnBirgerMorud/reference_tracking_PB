@@ -1,6 +1,7 @@
 import os
 import sys
 
+from matplotlib import animation
 import matplotlib.pyplot as plt
 import torch
 from matplotlib.lines import Line2D
@@ -44,6 +45,7 @@ REPORT_FIGURE_PATH = "experiments/bumpercar/report_trajectory.svg"
 REPORT_COLLISION_FIGURE_PATH = "experiments/bumpercar/report_collision.svg"
 REPORT_INIT_FIGURE_PATH = "experiments/bumpercar/report_setup.svg"
 REPORT_SNAPSHOT_FIGURE_PATH = "experiments/bumpercar/report_snapshots.svg"
+TRAJECTORY_GIF_PATH = "experiments/bumpercar/trajectory.gif"
 REPORT_FINAL_RADIUS = 1.0
 
 DT = 0.04
@@ -261,7 +263,7 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
         title = f"{title} - fixed crossing"
 
     with torch.no_grad():
-        x_log, _, _ = system.rollout(controller, data, train=False)
+        x_log, _, dxRef_log = system.rollout(controller, data, train=False)
 
     _, _, obstacle_centers, _, _, _ = getCarInitParams(device)
     sim_obstacle_collision_indices = obstacle_collision_indices(
@@ -271,7 +273,7 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
     )
     # print(f"Sim obstacle collision indices: {sim_obstacle_collision_indices}")
 
-    return x_log[0].detach().cpu(), xbar.cpu(), title
+    return x_log[0].detach().cpu(), xbar.cpu(), dxRef_log, title
 
 
 def draw_car(ax, x, y, theta, color, alpha=0.75):
@@ -369,7 +371,7 @@ def draw_sample_regions(ax, colors):
 
 
 def save_report_figure(path=REPORT_FIGURE_PATH):
-    x_log, xbar, _ = simulate()
+    x_log, xbar, dx_log, _ = simulate()
     _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
     n_agents = 2
     colors = ["tab:blue", "tab:orange"]
@@ -422,11 +424,11 @@ def save_report_figure(path=REPORT_FIGURE_PATH):
 
 
 def save_snapshot_report_figure(path=REPORT_SNAPSHOT_FIGURE_PATH):
-    x_log, xbar, _ = simulate()
+    x_log, xbar, dx_log, _ = simulate()
     _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
     n_agents = 2
     colors = ["tab:blue", "tab:orange"]
-    snapshot_idxs = [0, 30, 60, 120, 260]
+    snapshot_idxs = [0, 30, 60, 120, 399]
     snapshot_labels = ["1", "2", "3", "4", "5"]
     snapshot_alphas = [0.30, 0.50, 0.65, 0.8, 0.9]
 
@@ -650,8 +652,93 @@ def save_init_report_figure(path=REPORT_INIT_FIGURE_PATH):
     print(f"[INFO] saved init report figure to {path}")
 
 
+def save_trajectory_gif(path=TRAJECTORY_GIF_PATH, frame_stride=4, fps=20):
+    x_log, xbar, dx_log, title = simulate()
+    _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
+    _, _, _, _, _, _, _, _, min_dist = getLossParams(device)
+    n_agents = 2
+    colors = ["tab:blue", "tab:orange"]
+    frames = list(range(0, x_log.shape[0], frame_stride))
+    if frames[-1] != x_log.shape[0] - 1:
+        frames.append(x_log.shape[0] - 1)
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.set_title(title)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(-3.5, 3.5)
+    ax.set_ylim(-4.0, 6.0)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.grid(True, alpha=0.3)
+    draw_sample_regions(ax, colors)
+    draw_obstacles(ax, obstacle_centers, obstacle_covs)
+
+    path_lines = []
+    car_patches = []
+    safety_patches = []
+    time_text = ax.text(0.02, 0.97, "", transform=ax.transAxes, va="top")
+
+    for i in range(n_agents):
+        base = 7 * i
+        color = colors[i]
+        (path_line,) = ax.plot([], [], color=color, linewidth=2)
+        path_lines.append(path_line)
+        car_patches.append(draw_car(ax, x_log[0, base], x_log[0, base + 1], x_log[0, base + 2], color))
+        safety_circle = Circle(
+            xy=(x_log[0, base].item(), x_log[0, base + 1].item()),
+            radius=min_dist / 2,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.08,
+            linewidth=1.0,
+        )
+        ax.add_patch(safety_circle)
+        safety_patches.append(safety_circle)
+        ax.plot(xbar[base], xbar[base + 1], marker="*", markersize=14, color=color)
+        ax.plot(x_log[0, base], x_log[0, base + 1], marker="o", markersize=7, color=color, fillstyle="none")
+
+    def update(frame):
+        artists = []
+        for i in range(n_agents):
+            base = 7 * i
+            path_lines[i].set_data(x_log[:frame + 1, base], x_log[:frame + 1, base + 1])
+            safety_patches[i].center = (x_log[frame, base].item(), x_log[frame, base + 1].item())
+            car_patches[i].remove()
+            car_patches[i] = draw_car(
+                ax,
+                x_log[frame, base],
+                x_log[frame, base + 1],
+                x_log[frame, base + 2],
+                colors[i],
+            )
+            artists.extend([path_lines[i], safety_patches[i], car_patches[i]])
+
+        dist = torch.linalg.norm(x_log[frame, 0:2] - x_log[frame, 7:9]).item()
+        is_collision = dist < min_dist
+        time_text.set_color("tab:red" if is_collision else "black")
+        time_text.set_text(f"step {frame}   distance {dist:.2f} m")
+        artists.append(time_text)
+        return artists
+
+    anim = animation.FuncAnimation(
+        fig,
+        update,
+        frames=frames,
+        interval=1000 / fps,
+        blit=False,
+        repeat=True,
+    )
+
+    output_dir = os.path.dirname(path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    anim.save(path, writer="pillow", fps=fps)
+    plt.close(fig)
+    print(f"[INFO] saved trajectory GIF to {path}")
+
+
 def show_simulation():
-    x_log, xbar, title = simulate()
+    x_log, xbar, dx_log, title = simulate()
     _, _, obstacle_centers, obstacle_covs, _, _ = getCarInitParams(device)
     _, _, _, _, _, _, _, _, min_dist = getLossParams(device)
     n_agents = 2

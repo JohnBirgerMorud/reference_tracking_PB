@@ -1,5 +1,6 @@
 import os
 import sys
+import csv
 
 from matplotlib import animation
 import matplotlib.pyplot as plt
@@ -46,9 +47,11 @@ REPORT_COLLISION_FIGURE_PATH = "experiments/bumpercar/report_collision.svg"
 REPORT_INIT_FIGURE_PATH = "experiments/bumpercar/report_setup.svg"
 REPORT_SNAPSHOT_FIGURE_PATH = "experiments/bumpercar/report_snapshots.svg"
 TRAJECTORY_GIF_PATH = "experiments/bumpercar/trajectory.gif"
+ROLLOUT_METRICS_PATH = "experiments/bumpercar/rollout_metrics.csv"
 REPORT_FINAL_RADIUS = 1.0
 
 DT = 0.04
+
 
 
 def make_generated_sample_data(horizon, sample_index=0, random_seed=11, split="train"):
@@ -235,6 +238,8 @@ def evaluate_controller():
     print(f"Test obstacle collision indices: {test_obstacle_collision_indices}")
 
 
+
+
 def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_index=SIM_SAMPLE_INDEX):
     system = BumpercarSystem(
         params=car_params,
@@ -274,6 +279,153 @@ def simulate(horizon=400, use_generated_sample=SIM_USE_GENERATED_SAMPLE, sample_
     # print(f"Sim obstacle collision indices: {sim_obstacle_collision_indices}")
 
     return x_log[0].detach().cpu(), xbar.cpu(), dxRef_log, title
+
+
+def evaluate_rollout_metrics(
+    num_runs,
+    horizon=400,
+    split="test",
+    random_seed=EVAL_RANDOM_SEED,
+    save_path=ROLLOUT_METRICS_PATH,
+):
+    system = BumpercarSystem(
+        params=car_params,
+        x_init=None,
+        u_init=None,
+        dt=DT,
+    ).to(device)
+
+    if TRAINED_PBR_MODEL_PATH:
+        controller = load_controller(system, TRAINED_PBR_MODEL_PATH)
+        controller_name = "trained_pRB"
+    else:
+        controller = ZeroController(ref_dim=2 * system.n_agents).to(device)
+        controller_name = "PID_only"
+
+    train_data, test_data = make_eval_data(
+        horizon=horizon,
+        num_rollouts=num_runs,
+        num_test_rollouts=num_runs,
+        random_seed=random_seed,
+    )
+    if split == "train":
+        data = train_data
+    elif split == "test":
+        data = test_data
+    else:
+        raise ValueError(f"Unknown split: {split}")
+
+    with torch.no_grad():
+        x_log, _, u_log = system.rollout(controller, data, train=False)
+
+    nx = system.state_dim
+    pos_idx = system.pos_indices()
+    n_agents = system.n_agents
+    _, _, obstacle_centers, _, _, _ = getCarInitParams(device)
+    _, _, _, _, _, _, _, _, min_dist = getLossParams(device)
+
+    final_pos = x_log[:, -1, pos_idx].reshape(num_runs, n_agents, 2)
+    final_ref = data[:, -1, nx + torch.tensor(pos_idx, device=data.device)].reshape(num_runs, n_agents, 2)
+    steady_state_error = torch.linalg.norm(final_pos - final_ref, dim=-1)
+
+    rollout_horizon = x_log.shape[1]
+    positions = x_log[:, :, pos_idx].reshape(num_runs, rollout_horizon, n_agents, 2)
+    car_distance = torch.linalg.norm(positions[:, :, 0, :] - positions[:, :, 1, :], dim=-1)
+    closest_car_distance = car_distance.min(dim=1).values
+
+    centers = torch.stack([
+        center.to(device=positions.device, dtype=positions.dtype).flatten()
+        for center in obstacle_centers
+    ])
+    obstacle_distances = torch.linalg.norm(
+        positions.unsqueeze(3) - centers.view(1, 1, 1, -1, 2),
+        dim=-1,
+    )
+    closest_obstacle_distance_by_center = obstacle_distances.min(dim=1).values
+    closest_obstacle_distance = closest_obstacle_distance_by_center.min(dim=-1).values
+    metrics = {
+        "controller": controller_name,
+        "split": split,
+        "horizon": horizon,
+        "dt": DT,
+        "x_log": x_log.detach().cpu(),
+        "u_log": u_log.detach().cpu(),
+        "steady_state_error": steady_state_error.detach().cpu(),
+        "closest_car_distance": closest_car_distance.detach().cpu(),
+        "closest_obstacle_distance": closest_obstacle_distance.detach().cpu(),
+        "closest_obstacle_distance_by_center": closest_obstacle_distance_by_center.detach().cpu(),
+    }
+
+    def rmse(values, dim=0):
+        return torch.sqrt(torch.mean(values.detach().cpu() ** 2, dim=dim))
+
+    def format_list(values):
+        if values.dim() == 0:
+            return f"{values.item():.3f}"
+        return [round(v, 3) for v in values.flatten().tolist()]
+
+    print(f"[INFO] evaluated {num_runs} {split} rollouts with {controller_name}")
+    print("[SUMMARY] Steady-state error per car [m]")
+    print(f"  RMSE: {format_list(rmse(metrics['steady_state_error']))}")
+    print(f"  Std:  {format_list(metrics['steady_state_error'].std(dim=0, unbiased=False))}")
+    print(f"  Worst/highest: {format_list(metrics['steady_state_error'].max(dim=0).values)}")
+
+    print("[SUMMARY] Closest car-car distance [m]")
+    print(f"  RMS: {format_list(rmse(metrics['closest_car_distance']))}")
+    print(f"  Std: {format_list(metrics['closest_car_distance'].std(unbiased=False))}")
+    print(f"  Safety-worst/min: {metrics['closest_car_distance'].min().item():.3f}")
+    print(f"  Highest/max:      {metrics['closest_car_distance'].max().item():.3f}")
+    too_close_count = (metrics["closest_car_distance"] < min_dist).sum().item()
+    print(f"  Runs closer than {min_dist:.2f} m: {too_close_count}/{num_runs}")
+
+    print("[SUMMARY] Closest car-obstacle-center distance per car [m]")
+    print(f"  RMS: {format_list(rmse(metrics['closest_obstacle_distance']))}")
+    print(f"  Std: {format_list(metrics['closest_obstacle_distance'].std(dim=0, unbiased=False))}")
+    print(f"  Safety-worst/min: {format_list(metrics['closest_obstacle_distance'].min(dim=0).values)}")
+    print(f"  Highest/max:      {format_list(metrics['closest_obstacle_distance'].max(dim=0).values)}")
+
+    print("[SUMMARY] Closest car-obstacle-center distance per car/obstacle [m]")
+    print(f"  RMS: {format_list(rmse(metrics['closest_obstacle_distance_by_center']))}")
+    print(f"  Std: {format_list(metrics['closest_obstacle_distance_by_center'].std(dim=0, unbiased=False))}")
+    print(f"  Safety-worst/min: {format_list(metrics['closest_obstacle_distance_by_center'].min(dim=0).values)}")
+    print(f"  Highest/max:      {format_list(metrics['closest_obstacle_distance_by_center'].max(dim=0).values)}")
+
+    if save_path is not None:
+        output_dir = os.path.dirname(save_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        with open(save_path, "w", newline="") as csvfile:
+            fieldnames = (
+                ["run", "closest_car_distance"]
+                + [f"steady_state_error_car_{i + 1}" for i in range(n_agents)]
+                + [f"closest_obstacle_distance_car_{i + 1}" for i in range(n_agents)]
+                + [
+                    f"closest_obstacle_distance_car_{i + 1}_obstacle_{j + 1}"
+                    for i in range(n_agents)
+                    for j in range(len(obstacle_centers))
+                ]
+            )
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+
+            for run_idx in range(num_runs):
+                row = {
+                    "run": run_idx,
+                    "closest_car_distance": closest_car_distance[run_idx].item(),
+                }
+                for i in range(n_agents):
+                    row[f"steady_state_error_car_{i + 1}"] = steady_state_error[run_idx, i].item()
+                    row[f"closest_obstacle_distance_car_{i + 1}"] = closest_obstacle_distance[run_idx, i].item()
+                    for j in range(len(obstacle_centers)):
+                        row[f"closest_obstacle_distance_car_{i + 1}_obstacle_{j + 1}"] = (
+                            closest_obstacle_distance_by_center[run_idx, i, j].item()
+                        )
+                writer.writerow(row)
+
+        print(f"[INFO] saved rollout metrics to {save_path}")
+
+    return metrics
 
 
 def draw_car(ax, x, y, theta, color, alpha=0.75):
@@ -818,8 +970,10 @@ def show_simulation():
 
 
 if __name__ == "__main__":
+    evaluate_rollout_metrics(num_runs=500, horizon=400, save_path="experiments/bumpercar/distances.csv")
     if EVALUATE_MODEL and TRAINED_PBR_MODEL_PATH:
         evaluate_controller()
     elif EVALUATE_MODEL:
         print("[INFO] skipping trained-model evaluation because TRAINED_PBR_MODEL_PATH is empty.")
     show_simulation()
+

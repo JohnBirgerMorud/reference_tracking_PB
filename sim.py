@@ -22,20 +22,13 @@ from plants.bumpercar.bumpercar_dataset import BumpercarDataset
 
 
 # Add your trained pRB checkpoint here. Prefer a checkpoint with MLP weights, e.g.
-# "experiments/robots/saved_results/perf_boost_XX_XX_XX_XX_XX/checkpoints/checkpoint_latest.pt"
-# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_smoother_traj.pt"
-# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/controller_zero_collisions.pt"
-# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
-# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00110 (2) copy.pt"
-# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/checkpoint_epoch_00460.pt"
-# TRAINED_PBR_MODEL_PATH = "experiments/bumpercar/trained_pRB/trained_controller_loss227_trueArena.pt"
 TRAINED_PBR_MODEL_PATH="experiments/bumpercar/trained_pRB/rPB_best.pt"
 
 EVALUATE_MODEL = True
 EVAL_HORIZON = 500
 EVAL_NUM_ROLLOUTS = 100
 EVAL_NUM_TEST_ROLLOUTS = 500
-EVAL_RANDOM_SEED = 3
+EVAL_RANDOM_SEED = 2
 
 SIM_USE_GENERATED_SAMPLE = True
 SIM_DATA_SPLIT = "train"
@@ -970,7 +963,7 @@ def show_simulation():
 
 
 if __name__ == "__main__":
-    evaluate_rollout_metrics(num_runs=500, horizon=400, save_path="experiments/bumpercar/distances.csv")
+    # evaluate_rollout_metrics(num_runs=500, horizon=400, save_path="experiments/bumpercar/distances.csv")
     if EVALUATE_MODEL and TRAINED_PBR_MODEL_PATH:
         evaluate_controller()
     elif EVALUATE_MODEL:

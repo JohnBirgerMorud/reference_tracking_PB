@@ -161,7 +161,7 @@ class BumpercarSystem(nn.Module):
         x_init=None,
         u_init=None,
         n_agents=2,
-        dt=0.1,
+        dt=0.04,
         model_path="plants/bumpercar/model_kinematic_mlp.pth",
     ):
         super().__init__()
